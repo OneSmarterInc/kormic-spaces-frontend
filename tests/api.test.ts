@@ -5,7 +5,7 @@ import { spacesPagePath, spacesPageSegment } from '../src/spaces/deployment.ts';
 
 test('standalone employer routes are independent of API routes', () => {
   assert.equal(spacesPagePath(), '/');
-  for (const page of ['jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'settings']) {
+  for (const page of ['jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings']) {
     assert.equal(spacesPagePath(page), `/${page}`);
     assert.equal(spacesPageSegment(`/${page}/`), page);
   }

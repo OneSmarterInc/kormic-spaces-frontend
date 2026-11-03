@@ -2,7 +2,7 @@
 
 Standalone employer frontend for Kormic Spaces: company sign-in, overview, jobs,
 candidate profiles and fit ranking, hiring pipeline, messages, hiring copilot,
-team settings, shared views, and theme selection.
+team settings, shared views, searchable activity logs, and theme selection.
 
 This repository contains only the employer web application. It does not contain
 the Careers candidate app, Django backend, databases, credentials, or prototype
@@ -20,13 +20,14 @@ npm run dev
 
 Open `http://localhost:8082`. Vite proxies `/spaces/` to Django, while employer UI
 routes are `/`, `/jobs`, `/candidates`, `/pipeline`, `/messages`, `/copilot`, and
-`/settings`. Keep `localhost` consistent across both services. Add
+`/activity`, and `/settings`. Keep `localhost` consistent across both services. Add
 `http://localhost:8082` to Django's CSRF trusted origins if not already present.
 Use an existing employer account or Create a company workspace. No account or
 password is embedded in this frontend.
 
 Optional configuration: copy `.env.example` to `.env.local`. `SPACES_DEV_BACKEND`
 changes the development proxy target. `VITE_API_HOST` is a public API origin;
+`VITE_CAREERS_URL` and `VITE_SPACES_URL` configure links between the portals.
 leave it empty to use the same-origin proxy. Never put API keys or other secrets
 in any `VITE_` variable. Anthropic keys belong only in Django's environment.
 

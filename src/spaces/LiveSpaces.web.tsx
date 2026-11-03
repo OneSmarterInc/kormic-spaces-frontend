@@ -1,13 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type FormEvent,
   type ReactNode,
 } from 'react';
-import { spacesPagePath, spacesPageSegment } from './deployment';
+import { portalUrl, spacesPagePath, spacesPageSegment } from './deployment';
 import { appConfig } from '../services/config';
 import {
   SpacesClient,
@@ -18,7 +19,36 @@ import {
   type SharedView,
   type WorkspaceData,
 } from './liveApi';
+import { ActivityLog } from './ActivityLog.web';
+import { useDebouncedSearch } from './useDebouncedSearch';
 import { isThemeId, themes, type ThemeId } from './themes';
+
+const pageDescriptions: Record<string, string> = {
+  Overview: 'Your jobs, shortlist and next steps in one place.',
+  Jobs: 'Define the role. Set clear requirements. Find the right match.',
+  Messages: 'Keep candidate conversations connected to the role.',
+  'Hiring copilot': 'Explore candidate evidence with Sage, your hiring assistant.',
+  'Activity log': 'A complete, read-only history of changes across your workspace.',
+  Settings: 'Manage your team and make this workspace your own.',
+};
+const navPaths: Record<string, string> = {
+  Overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+  Jobs: 'M8 6V3h8v3 M3 7h18v14H3z M3 12h18 M10 12v3h4v-3',
+  Candidates:
+    'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M17 4a4 4 0 0 1 0 7 M22 21v-2a4 4 0 0 0-3-4',
+  Pipeline: 'M3 4h5v16H3z M10 4h5v11h-5z M17 4h4v7h-4z',
+  Messages: 'M21 3H3v14h5l4 4 4-4h5z M7 8h10 M7 12h6',
+  'Hiring copilot': 'm12 3 3 6 6 3-6 3-3 6-3-6-6-3 6-3z',
+  'Activity log': 'M8 3h12v18H4V3h4 M8 8h8 M8 12h8 M8 16h5',
+  Settings: 'M4 6h16 M4 12h16 M4 18h16 M8 3v6 M16 9v6 M9 15v6',
+};
+function NavIcon({ page }: { page: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d={navPaths[page]} />
+    </svg>
+  );
+}
 
 function formValues(form: HTMLFormElement): Record<string, string> {
   const data = new FormData(form);
@@ -37,10 +67,18 @@ const pages = [
   'Pipeline',
   'Messages',
   'Hiring copilot',
+  'Activity log',
   'Settings',
 ];
-const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'settings'];
-const labelDate = (s: string) => new Date(s).toLocaleString();
+const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings'];
+const labelDate = (s: string) =>
+  new Date(s).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(new Date(s).getFullYear() !== new Date().getFullYear() ? { year: 'numeric' as const } : {}),
+  });
 const errorText = (e: unknown) =>
   e instanceof Error ? e.message : 'The request could not be completed.';
 const emptyJob: LiveJob = {
@@ -88,7 +126,11 @@ function Button({
   );
 }
 function Tag({ children }: { children: ReactNode }) {
-  return <span className="tag">{children}</span>;
+  return (
+    <span className="tag" data-status={typeof children === 'string' ? children : undefined}>
+      {children}
+    </span>
+  );
 }
 function Empty({ children }: { children: ReactNode }) {
   return (
@@ -102,10 +144,12 @@ function Modal({
   title,
   children,
   close,
+  className = '',
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -121,7 +165,7 @@ function Modal({
   return (
     <dialog
       ref={ref}
-      className="live-dialog"
+      className={`live-dialog ${className}`}
       aria-label={title}
       onCancel={(e) => {
         e.preventDefault();
@@ -157,6 +201,138 @@ function Search({
   );
 }
 
+function JobSelector({
+  jobs,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  jobs: LiveJob[];
+  selected?: LiveJob;
+  disabled: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const input = useRef<HTMLInputElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const listId = useId();
+  const options = jobs.filter((job) =>
+    `${job.title} ${job.status}`.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+  const activeIndex = Math.min(active, Math.max(0, options.length - 1));
+  useEffect(() => {
+    if (open) input.current?.focus();
+  }, [open]);
+  const choose = (id: string) => {
+    setOpen(false);
+    setQuery('');
+    trigger.current?.focus();
+    onSelect(id);
+  };
+  return (
+    <div
+      className="job-selector"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <button
+        ref={trigger}
+        className="job-selector-trigger"
+        type="button"
+        disabled={disabled}
+        aria-label={`Job context: ${selected?.title ?? 'No jobs yet'}`}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={open ? listId : undefined}
+        onClick={() => {
+          setOpen(!open);
+          setQuery('');
+          setActive(0);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
+        <span>
+          {selected?.title ?? 'No jobs yet'}
+          {selected && <small>{selected.status}</small>}
+        </span>
+        <span aria-hidden="true">⌄</span>
+      </button>
+      {open && (
+        <div className="job-selector-popover">
+          <input
+            ref={input}
+            type="search"
+            role="combobox"
+            aria-label="Search jobs"
+            placeholder="Search jobs…"
+            aria-expanded={true}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={options.length ? `${listId}-${activeIndex}` : undefined}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActive(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setOpen(false);
+                trigger.current?.focus();
+              }
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActive(
+                  Math.max(
+                    0,
+                    Math.min(
+                      options.length - 1,
+                      activeIndex + (event.key === 'ArrowDown' ? 1 : -1),
+                    ),
+                  ),
+                );
+              }
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                const option = options[activeIndex];
+                if (option) choose(option.id);
+              }
+            }}
+          />
+          <ul id={listId} role="listbox" aria-label="Jobs">
+            {options.map((job, index) => (
+              <li
+                key={job.id}
+                id={`${listId}-${index}`}
+                role="option"
+                aria-selected={job.id === selected?.id}
+                className={index === activeIndex ? 'is-active' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => choose(job.id)}
+              >
+                <span>
+                  {job.title}
+                  <small>{job.status}</small>
+                </span>
+                {job.id === selected?.id && <span aria-hidden="true">✓</span>}
+              </li>
+            ))}
+          </ul>
+          {!options.length && <p role="status">No jobs match your search.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const api = useMemo(() => new SpacesClient(appConfig().apiHost), []);
   const [session, setSession] = useState<SessionData>();
@@ -164,11 +340,20 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const [page, setPage] = useState(pageFromUrl);
   const [jobId, setJobId] = useState(new URLSearchParams(location.search).get('job') ?? '');
   const [query, setQuery] = useState('');
-  const [jobQuery, setJobQuery] = useState('');
+  const candidateQuery = useDebouncedSearch(query);
   const [sort, setSort] = useState('-fit');
   const [stageFilter, setStageFilter] = useState('');
   const [limits, setLimits] = useState<Record<string, number>>({});
-  const [tableLimit, setTableLimit] = useState(50);
+  const [pageSize, setPageSize] = useState(10);
+  const [candidatePage, setCandidatePage] = useState({ key: '', index: 0 });
+  const [candidateResult, setCandidateResult] = useState<{
+    key: string;
+    scope: string;
+    count: number;
+    results: LiveCandidate[];
+  }>();
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [candidateError, setCandidateError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -193,7 +378,20 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   });
   const org = session?.organizations[0]?.id;
   const job = data?.jobs.find((j) => j.id === jobId) ?? data?.jobs[0];
-  const profile = data?.candidates.find((c) => c.id === profileId);
+  const candidateScope = JSON.stringify([org, jobId, candidateQuery, stageFilter]);
+  const candidateKey = JSON.stringify([candidateScope, sort, pageSize]);
+  const pageIndex = candidatePage.key === candidateKey ? candidatePage.index : 0;
+  const resultKey = `${candidateKey}:${pageIndex}`;
+  const currentCandidates = candidateResult?.key === resultKey ? candidateResult : undefined;
+  // Keep the previous server page during a sort, without showing another job's results.
+  const displayedCandidates =
+    candidateResult?.scope === candidateScope ? candidateResult : undefined;
+  const candidatesPending =
+    page === 'Candidates' &&
+    (candidateLoading || (!!org && !!data && !currentCandidates && !candidateError));
+  const profile = (page === 'Candidates' ? displayedCandidates?.results : data?.candidates)?.find(
+    (c) => c.id === profileId,
+  );
   const requestVersion = useRef(0);
   const reload = useCallback(
     async (selected?: string) => {
@@ -201,9 +399,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       const version = ++requestVersion.current;
       setLoading(true);
       try {
-        const next = await api.request<WorkspaceData>(
-          `${org}/workspace/${selected ? `?job=${selected}` : ''}`,
-        );
+        const params = new URLSearchParams();
+        if (selected) params.set('job', selected);
+        if (['Candidates', 'Activity log'].includes(page))
+          params.set('include_candidates', 'false');
+        const next = await api.request<WorkspaceData>(`${org}/workspace/?${params}`);
         if (version !== requestVersion.current) return;
         setData(next);
         setJobId(next.selectedJob ?? '');
@@ -213,8 +413,62 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
         if (version === requestVersion.current) setLoading(false);
       }
     },
-    [api, org],
+    [api, org, page],
   );
+  useEffect(() => {
+    if (page !== 'Candidates' || !org || !data) return;
+    let cancelled = false;
+    setCandidateLoading(true);
+    setCandidateError('');
+    const controller = new AbortController();
+    {
+      const params = new URLSearchParams({
+        q: candidateQuery,
+        stage: stageFilter,
+        sort,
+        limit: String(pageSize),
+        offset: String(pageIndex * pageSize),
+      });
+      if (jobId) params.set('job', jobId);
+      void api
+        .request<{ count: number; results: LiveCandidate[] }>(
+          `${org}/candidates/?${params}`,
+          'GET',
+          undefined,
+          controller.signal,
+        )
+        .then((response) => {
+          if (cancelled) return;
+          const lastPage = Math.max(0, Math.ceil(response.count / pageSize) - 1);
+          if (pageIndex > lastPage) setCandidatePage({ key: candidateKey, index: lastPage });
+          else setCandidateResult({ ...response, key: resultKey, scope: candidateScope });
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setCandidateError(errorText(error));
+        })
+        .finally(() => {
+          if (!cancelled) setCandidateLoading(false);
+        });
+    }
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [
+    api,
+    org,
+    page,
+    data,
+    jobId,
+    candidateQuery,
+    candidateScope,
+    stageFilter,
+    sort,
+    pageSize,
+    pageIndex,
+    candidateKey,
+    resultKey,
+  ]);
   useEffect(() => {
     let active = true;
     void api
@@ -265,7 +519,8 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     setPage(next);
     setQuery('');
     setStageFilter('');
-    setTableLimit(50);
+    setSort('-fit');
+    setCandidatePage({ key: '', index: 0 });
     history.pushState(
       null,
       '',
@@ -301,6 +556,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     void run(() => reload(id));
   };
   const rows = useMemo(() => {
+    if (page === 'Candidates') return displayedCandidates?.results ?? [];
     const needle = query.trim().toLocaleLowerCase();
     const values = (data?.candidates ?? []).filter(
       (c) =>
@@ -314,20 +570,24 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           ? (a.fit?.score ?? -1)
           : field === 'years'
             ? (a.years ?? -1)
-            : String(a[field as 'name' | 'city' | 'stage']);
+            : field === 'assessment'
+              ? (a.fit?.eligibility ?? 'No job context')
+              : String(a[field as 'name' | 'city' | 'stage']);
       const bv =
         field === 'fit'
           ? (b.fit?.score ?? -1)
           : field === 'years'
             ? (b.years ?? -1)
-            : String(b[field as 'name' | 'city' | 'stage']);
+            : field === 'assessment'
+              ? (b.fit?.eligibility ?? 'No job context')
+              : String(b[field as 'name' | 'city' | 'stage']);
       const order =
         typeof av === 'number' && typeof bv === 'number'
           ? av - bv
           : String(av).localeCompare(String(bv));
       return (sort.startsWith('-') ? -order : order) || a.id.localeCompare(b.id);
     });
-  }, [data, query, stageFilter, sort]);
+  }, [data, query, stageFilter, sort, page, displayedCandidates]);
   const review = (candidate: LiveCandidate, stage: string, note = candidate.note) =>
     run(() =>
       mutate(
@@ -358,28 +618,27 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     }
   }, [data?.sharedViews]);
   const selector = (
-    <div className="live-job-picker">
-      <Search label="Search jobs" value={jobQuery} onChange={setJobQuery} />
-      <select
-        aria-label="Job context"
-        disabled={busy || loading || !data?.jobs.length}
-        value={job?.id ?? ''}
-        onChange={(e) => selectJob(e.target.value)}
-      >
-        {!data?.jobs.length && <option value="">No jobs yet</option>}
-        {data?.jobs
-          .filter((j) => j.id === job?.id || j.title.toLowerCase().includes(jobQuery.toLowerCase()))
-          .map((j) => (
-            <option key={j.id} value={j.id}>
-              {j.title} · {j.status}
-            </option>
-          ))}
-      </select>
-    </div>
+    <JobSelector
+      jobs={data?.jobs ?? []}
+      selected={job}
+      disabled={busy || loading || !data?.jobs.length}
+      onSelect={selectJob}
+    />
   );
   const table = (compact = false) => (
-    <div className="table-wrap">
-      <table>
+    <div
+      className="table-wrap candidate-table-wrap"
+      aria-busy={!compact && page === 'Candidates' && candidatesPending}
+    >
+      <table className="candidate-table">
+        <colgroup>
+          <col style={{ width: '34%' }} />
+          <col style={{ width: '11%' }} />
+          <col style={{ width: '14%' }} />
+          <col style={{ width: '14%' }} />
+          <col style={{ width: '13%' }} />
+          <col style={{ width: '14%' }} />
+        </colgroup>
         <thead>
           <tr>
             {[
@@ -388,6 +647,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               ['years', 'Experience'],
               ['city', 'Location'],
               ['stage', 'Stage'],
+              ['assessment', 'Assessment'],
             ].map(([field, label]) => (
               <th
                 key={field}
@@ -401,7 +661,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               >
                 <button
                   className="live-sort"
-                  onClick={() => setSort(sort === field ? `-${field}` : field!)}
+                  onClick={() => setSort((current) => (current === field ? `-${field}` : field!))}
                 >
                   {label}{' '}
                   <span aria-hidden="true">
@@ -410,11 +670,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 </button>
               </th>
             ))}
-            <th>Assessment</th>
           </tr>
         </thead>
         <tbody>
-          {rows.slice(0, compact ? 5 : tableLimit).map((c) => (
+          {(compact ? rows.slice(0, 5) : rows).map((c) => (
             <tr key={c.id}>
               <td>
                 <button className="person-cell" onClick={() => setProfileId(c.id)}>
@@ -448,15 +707,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           ))}
         </tbody>
       </table>
-      {!rows.length && (
+      {!rows.length && !candidatesPending && !candidateError && (
         <Empty>
           Profiles appear when candidates share their profile or apply to one of your jobs.
         </Empty>
-      )}
-      {!compact && rows.length > tableLimit && (
-        <Button onClick={() => setTableLimit((n) => n + 50)}>
-          Show more ({rows.length - tableLimit} remaining)
-        </Button>
       )}
     </div>
   );
@@ -507,7 +761,13 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             <br />
             <em>Make your move.</em>
           </h1>
-          <p>A considered space to find your next hire.</p>
+          <p>A focused workspace for thoughtful hiring.</p>
+          <ul className="login-benefits">
+            <li>Review profiles with supporting evidence</li>
+            <li>Keep your team and pipeline in sync</li>
+            <li>Move from shortlist to conversation</li>
+          </ul>
+          {portalUrl('careers') && <a href={portalUrl('careers')}>Go to the candidate portal</a>}
         </section>
         <section className="login-form-side">
           <AuthForm
@@ -525,16 +785,52 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     );
   return (
     <div className="shell">
-      <header className="global-header">
-        <div className="global-header-inner">
-          <button className="home-brand" onClick={() => navigate('Overview')}>
-            <strong>kormic</strong> spaces
-          </button>
-          <span className="brand-separator" />
-          <span>{data?.organization.name ?? session.organizations[0]?.name}</span>
-          <span className="header-spacer" />
-          <Button onClick={() => navigate('Candidates')}>Search people</Button>
-          <Button onClick={() => navigate('Settings')}>Settings</Button>
+      <a className="skip" href="#spaces-main">
+        Skip to content
+      </a>
+      <aside className="workspace-sidebar">
+        <button
+          className="home-brand"
+          onClick={() => navigate('Overview')}
+          aria-label="Kormic Spaces home"
+        >
+          <span className="brand-mark" aria-hidden="true">
+            k
+          </span>
+          <span>
+            <strong>kormic</strong>
+            <small>SPACES</small>
+          </span>
+        </button>
+        <div className="workspace-identity">
+          <span className="workspace-avatar" aria-hidden="true">
+            {(data?.organization.name ?? session.organizations[0]?.name ?? 'W').slice(0, 1)}
+          </span>
+          <div>
+            <strong>{data?.organization.name ?? session.organizations[0]?.name}</strong>
+            <small>Hiring workspace</small>
+          </div>
+        </div>
+        <p className="nav-label">WORKSPACE</p>
+        <nav className="workspace-nav" aria-label="Workspace navigation">
+          {pages.map((p) => (
+            <button
+              key={p}
+              className={`nav-item ${page === p ? 'active' : ''}`}
+              aria-current={page === p ? 'page' : undefined}
+              onClick={() => navigate(p)}
+            >
+              <NavIcon page={p} />
+              <span>{p}</span>
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-bottom">
+          <p>
+            Consider the evidence.
+            <br />
+            Make the next move.
+          </p>
           <Button
             disabled={busy}
             onClick={() =>
@@ -551,24 +847,25 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             Sign out
           </Button>
         </div>
-      </header>
-      <div className="horizontal-nav-wrap">
-        <nav className="horizontal-nav" aria-label="Workspace navigation">
-          {pages
-            .filter((p) => p !== 'Settings')
-            .map((p) => (
-              <button
-                key={p}
-                className={`horizontal-nav-item ${page === p ? 'active' : ''}`}
-                aria-current={page === p ? 'page' : undefined}
-                onClick={() => navigate(p)}
-              >
-                {p}
-              </button>
-            ))}
-        </nav>
-      </div>
-      <main className="main" aria-busy={busy || loading}>
+      </aside>
+      <main
+        id="spaces-main"
+        tabIndex={-1}
+        className={`main page-${paths[pages.indexOf(page)] || 'overview'}`}
+        aria-busy={busy || loading}
+      >
+        <div className="workspace-topbar">
+          <span>
+            Workspace <span aria-hidden="true">/</span> <strong>{page}</strong>
+          </span>
+          <span>
+            {new Date().toLocaleDateString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            })}
+          </span>
+        </div>
         {error && (
           <div className="live-alert" role="alert">
             {error}{' '}
@@ -586,25 +883,25 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           <div role="status">Loading workspace…</div>
         ) : (
           <>
-            <div className="workspace-kicker">
-              <span>YOUR WORKSPACE</span>
-              <span>{new Date().toLocaleDateString()}</span>
-            </div>
             <div className="page-head">
               <div>
-                <h1>{page === 'Overview' ? 'Your hiring, in focus.' : page}</h1>
+                <h1>{page === 'Overview' ? 'Hiring overview' : page}</h1>
                 <p>
                   {page === 'Candidates'
-                    ? `${data.candidates.length} shared profiles · job fit is based on current evidence`
+                    ? `${data.overview.candidates} shared profiles · job fit is based on current evidence`
                     : page === 'Pipeline'
-                      ? 'One search across every stage. Five people per column to keep reviews focused.'
-                      : 'The right context. The right people. Your next move.'}
+                      ? 'Track progress and move candidates through your hiring process.'
+                      : pageDescriptions[page]}
                 </p>
               </div>
-              <div className="row">
-                <Button disabled={loading || busy} onClick={() => void run(() => reload(jobId))}>
-                  Refresh
-                </Button>
+              <div className="page-actions">
+                {['Overview', 'Candidates', 'Pipeline', 'Hiring copilot'].includes(page) &&
+                  selector}
+                {page !== 'Activity log' && (
+                  <Button disabled={loading || busy} onClick={() => void run(() => reload(jobId))}>
+                    Refresh
+                  </Button>
+                )}
                 {['Overview', 'Jobs'].includes(page) && (
                   <Button primary onClick={() => setEditing({ ...emptyJob })}>
                     + Create a job
@@ -612,11 +909,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 )}
               </div>
             </div>
-            {['Overview', 'Candidates', 'Pipeline', 'Hiring copilot'].includes(page) && (
-              <div className="live-toolbar">
-                {selector}
-                {loading && <span role="status">Updating job context…</span>}
-              </div>
+            {loading && (
+              <p className="context-loading" role="status">
+                Updating job context…
+              </p>
             )}
             {page === 'Overview' && (
               <>
@@ -643,9 +939,9 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 <section className="insight-banner">
                   <div>
                     <div className="insight-label">
-                      SAGE INSIGHT · {job?.title ?? 'YOUR NEXT OPPORTUNITY'}
+                      JOB SNAPSHOT · {job?.title ?? 'YOUR NEXT OPPORTUNITY'}
                     </div>
-                    <h2>{data.overview.eligible} matches. A clearer next step.</h2>
+                    <h2>{data.overview.eligible} eligible profiles to explore</h2>
                     <p>
                       {data.candidates.filter((c) => c.fit?.eligibility === 'Needs review').length}{' '}
                       profiles need an evidence check.
@@ -668,20 +964,16 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   <Button onClick={() => navigate('Candidates')}>All candidates →</Button>
                 </div>
                 {table(true)}
-                <section className="live-panel">
-                  <h2>Workspace activity</h2>
-                  {data.activity.length ? (
-                    data.activity.map((a) => (
-                      <p key={a.id}>
-                        {a.text} <small className="muted">{labelDate(a.created_at)}</small>
-                      </p>
-                    ))
-                  ) : (
-                    <p className="muted">Saved changes will appear here.</p>
-                  )}
-                </section>
+                <div className="activity-shortcut">
+                  <div>
+                    <h2>Workspace activity</h2>
+                    <p className="muted">Review who changed what, and when.</p>
+                  </div>
+                  <Button onClick={() => navigate('Activity log')}>View activity log →</Button>
+                </div>
               </>
             )}
+            {page === 'Activity log' && org && <ActivityLog key={org} api={api} org={org} />}
             {page === 'Jobs' && (
               <>
                 <div className="live-toolbar">
@@ -752,11 +1044,53 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                     ))}
                   </select>
                 </div>
+                <div className="candidate-update-status" role="status">
+                  {candidatesPending ? 'Updating results…' : ''}
+                </div>
                 {table()}
-                <p className="muted small">
-                  Showing {Math.min(tableLimit, rows.length)} of {rows.length}. Shared views are
-                  available only to signed-in workspace members.
-                </p>
+                {candidateError && <p role="alert">{candidateError}</p>}
+                <div className="candidate-pagination" aria-label="Candidate pagination">
+                  <span role="status">
+                    {candidatesPending
+                      ? 'Updating candidates…'
+                      : currentCandidates
+                        ? `${currentCandidates.count ? pageIndex * pageSize + 1 : 0}–${Math.min((pageIndex + 1) * pageSize, currentCandidates.count)} of ${currentCandidates.count} candidates`
+                        : 'No candidates loaded'}
+                  </span>
+                  <label>
+                    Per page{' '}
+                    <select
+                      value={pageSize}
+                      onChange={(event) => setPageSize(Number(event.target.value))}
+                    >
+                      {[10, 25, 50].map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button
+                    disabled={candidateLoading || pageIndex === 0}
+                    onClick={() => setCandidatePage({ key: candidateKey, index: pageIndex - 1 })}
+                  >
+                    Previous
+                  </Button>
+                  <span>
+                    Page {pageIndex + 1} of{' '}
+                    {Math.max(1, Math.ceil((currentCandidates?.count ?? 0) / pageSize))}
+                  </span>
+                  <Button
+                    disabled={
+                      candidateLoading ||
+                      !currentCandidates ||
+                      (pageIndex + 1) * pageSize >= currentCandidates.count
+                    }
+                    onClick={() => setCandidatePage({ key: candidateKey, index: pageIndex + 1 })}
+                  >
+                    Next
+                  </Button>
+                </div>
               </>
             )}
             {page === 'Pipeline' && (
@@ -772,44 +1106,46 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   />
                 </div>
                 <div className="live-board">
-                  {stages.map((stage) => {
-                    const column = rows.filter((c) => c.stage === stage);
-                    const limit = limits[stage] ?? 5;
-                    return (
-                      <section className="live-column" key={stage}>
-                        <h3>
-                          {stage} <Tag>{column.length}</Tag>
-                        </h3>
-                        {column.slice(0, limit).map((c) => (
-                          <article className="live-pipeline-card" key={c.id}>
-                            <button className="link-btn" onClick={() => setProfileId(c.id)}>
-                              {c.name}
-                            </button>
-                            <p className="muted small">{c.role}</p>
-                            <p>
-                              {c.fit?.score ?? '—'}% fit · {c.city}
-                            </p>
-                            <select
-                              disabled={busy || loading || !job}
-                              aria-label={`Stage for ${c.name}`}
-                              value={c.stage}
-                              onChange={(e) => void review(c, e.target.value)}
-                            >
-                              {stages.map((s) => (
-                                <option key={s}>{s}</option>
-                              ))}
-                            </select>
-                          </article>
-                        ))}
-                        {!column.length && <p className="muted small">No matching candidates.</p>}
-                        {column.length > limit && (
-                          <Button onClick={() => setLimits({ ...limits, [stage]: limit + 5 })}>
-                            Show more ({column.length - limit})
-                          </Button>
-                        )}
-                      </section>
-                    );
-                  })}
+                  {stages
+                    .filter((stage) => stage !== 'Rejected')
+                    .map((stage) => {
+                      const column = rows.filter((c) => c.stage === stage);
+                      const limit = limits[stage] ?? 5;
+                      return (
+                        <section className="live-column" key={stage}>
+                          <h3>
+                            {stage} <Tag>{column.length}</Tag>
+                          </h3>
+                          {column.slice(0, limit).map((c) => (
+                            <article className="live-pipeline-card" key={c.id}>
+                              <button className="link-btn" onClick={() => setProfileId(c.id)}>
+                                {c.name}
+                              </button>
+                              <p className="muted small">{c.role}</p>
+                              <p>
+                                {c.fit?.score ?? '—'}% fit · {c.city}
+                              </p>
+                              <select
+                                disabled={busy || loading || !job}
+                                aria-label={`Stage for ${c.name}`}
+                                value={c.stage}
+                                onChange={(e) => void review(c, e.target.value)}
+                              >
+                                {stages.map((s) => (
+                                  <option key={s}>{s}</option>
+                                ))}
+                              </select>
+                            </article>
+                          ))}
+                          {!column.length && <p className="muted small">No matching candidates.</p>}
+                          {column.length > limit && (
+                            <Button onClick={() => setLimits({ ...limits, [stage]: limit + 5 })}>
+                              Show more ({column.length - limit})
+                            </Button>
+                          )}
+                        </section>
+                      );
+                    })}
                 </div>
               </>
             )}
@@ -875,7 +1211,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               </>
             )}
             {page === 'Hiring copilot' && (
-              <section className="live-panel">
+              <section className="live-panel copilot-panel">
                 <div className="row between">
                   <div>
                     <h2>Sage, your hiring copilot</h2>
@@ -888,13 +1224,24 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   </Button>
                 </div>
                 {!data.copilotConfigured && (
-                  <p role="status">The server needs an Anthropic API key.</p>
+                  <p role="status">
+                    Sage is not available yet. Your workspace administrator can enable it.
+                  </p>
                 )}
                 <p className="small muted">
                   Context includes up to 25 visible candidates who allow AI assistance. Private
                   candidate conversations and screening details are excluded.
                 </p>
                 <div className="live-answer-list" aria-live="polite">
+                  {!answers.length && (
+                    <div className="copilot-welcome">
+                      <span className="copilot-symbol" aria-hidden="true">
+                        ✦
+                      </span>
+                      <h3>A second perspective on your shortlist</h3>
+                      <p>Compare evidence, identify gaps, or prepare your next conversation.</p>
+                    </div>
+                  )}
                   {answers.map((a, i) => (
                     <article key={i}>
                       <strong>You</strong>
@@ -984,32 +1331,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                     ))}
                   </div>
                 </section>
-                <section className="live-panel">
-                  <h2>Prototype data</h2>
-                  <p>
-                    Clear the earlier browser prototype. Saved workspace jobs, applications and
-                    messages are retained.
-                  </p>
-                  <Button
-                    onClick={() => {
-                      localStorage.removeItem('kormic-spaces-local-v1');
-                      setNotice('Earlier browser prototype data cleared.');
-                    }}
-                  >
-                    Reset demo data
-                  </Button>
-                </section>
               </>
             )}
           </>
         )}
       </main>
-      <footer className="workspace-footer">
-        <span>
-          <span className="saved-dot" />
-          {busy ? 'Saving or requesting…' : 'Connected to your workspace'}
-        </span>
-      </footer>
       {editing && (
         <Modal title={editing.id ? 'Edit job' : 'Create a job'} close={() => setEditing(undefined)}>
           <JobForm
@@ -1031,7 +1357,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
         </Modal>
       )}
       {profile && (
-        <Modal title={profile.name} close={() => setProfileId('')}>
+        <Modal title={profile.name} className="candidate-dialog" close={() => setProfileId('')}>
           <CandidateProfile
             candidate={profile}
             job={job}
@@ -1190,7 +1516,7 @@ function AuthForm({
           <>
             <label className="field">
               Your name
-              <input name="name" required defaultValue="Dr. Vikram Sethi" maxLength={160} />
+              <input name="name" required autoComplete="name" maxLength={160} />
             </label>
             <label className="field">
               Company
@@ -1249,7 +1575,8 @@ function JobForm({
     });
   };
   return (
-    <form onSubmit={submit}>
+    <form className="job-form" onSubmit={submit}>
+      <h3 className="form-section-title">Role details</h3>
       <div className="live-form-grid">
         {(['title', 'department', 'location', 'salary'] as const).map((key) => (
           <label className="field" key={key}>
@@ -1287,6 +1614,7 @@ function JobForm({
           onChange={(e) => change('description', e.target.value)}
         />
       </label>
+      <h3 className="form-section-title">Matching requirements</h3>
       <label className="field">
         Skills, separated by commas
         <input value={skills} onChange={(e) => setSkills(e.target.value)} />
@@ -1331,7 +1659,7 @@ function JobForm({
           Require experience evidence
         </label>
       </div>
-      <h3>Fit weights</h3>
+      <h3 className="form-section-title">Fit weights</h3>
       <p className="muted small">Total must equal 100. Missing evidence is marked for review.</p>
       <div className="live-form-grid">
         {['Skills', 'Experience', 'Preferences', 'Availability'].map((label, i) => (
@@ -1394,38 +1722,81 @@ function CandidateProfile({
 }) {
   const [note, setNote] = useState(c.note);
   return (
-    <>
-      <p>
-        {c.role} · {c.city}
-      </p>
-      <div className="fit-panel">
-        <h3>{job?.title ?? 'Choose a job to assess fit'}</h3>
-        <strong className="big-score">{c.fit?.score ?? '—'}%</strong>
-        <Tag>{c.fit?.eligibility ?? 'No job context'}</Tag>
-        {c.fit?.reasons.map((r) => (
-          <p key={r}>{r}</p>
-        ))}
-        {c.fit?.criteria.map((label, i) => (
-          <p key={label}>
-            {label}:{' '}
-            {c.fit?.breakdown[i] == null ? 'Unknown' : `${Math.round(c.fit.breakdown[i]! * 100)}%`}
+    <div className="candidate-profile">
+      <div className="candidate-intro">
+        <span className="candidate-avatar" aria-hidden="true">
+          {c.name
+            .split(' ')
+            .slice(0, 2)
+            .map((part) => part[0])
+            .join('')}
+        </span>
+        <div>
+          <p className="candidate-role">{c.role || 'Role not specified'}</p>
+          <p className="candidate-meta">
+            {c.city || 'Location not specified'} ·{' '}
+            {c.years === null ? 'Experience not evidenced' : `${c.years}+ years evidenced`}
           </p>
-        ))}
+        </div>
+        <Tag>{c.stage}</Tag>
+      </div>
+      <div className="candidate-fit">
+        <div className="candidate-fit-summary">
+          <p className="candidate-eyebrow">Job match</p>
+          <h3>{job?.title ?? 'Choose a job to assess fit'}</h3>
+          <strong className="big-score">{c.fit ? `${c.fit.score}%` : '—'}</strong>
+          <Tag>{c.fit?.eligibility ?? 'No job context'}</Tag>
+        </div>
+        <div className="candidate-criteria">
+          {c.fit?.criteria.map((label, i) => {
+            const value = c.fit?.breakdown[i];
+            const percent = value == null ? null : Math.round(value * 100);
+            return (
+              <div className="candidate-criterion" key={label}>
+                <div>
+                  <span>{label}</span>
+                  <strong>{percent === null ? 'Unknown' : `${percent}%`}</strong>
+                </div>
+                {percent !== null && <progress aria-label={label} max={100} value={percent} />}
+              </div>
+            );
+          })}
+        </div>
+        <div className="candidate-fit-reasons">
+          {c.fit?.reasons.map((r) => (
+            <p key={r}>{r}</p>
+          ))}
+        </div>
       </div>
       <section className="profile-section">
         <h3>Application preferences</h3>
-        <p>Roles: {c.preferences.roles.join(', ') || 'Not specified'}</p>
-        <p>Locations: {c.preferences.locations.join(', ') || 'Not specified'}</p>
-        <p>
-          Work: {c.preferences.workModes.join(', ') || 'Not specified'} ·{' '}
-          {c.preferences.jobTypes.join(', ')}
-        </p>
-        <p>
-          Availability:{' '}
-          {c.preferences.availableDays === null
-            ? 'Not specified'
-            : `${c.preferences.availableDays} days`}
-        </p>
+        <dl className="candidate-preferences">
+          <div>
+            <dt>Preferred roles</dt>
+            <dd>{c.preferences.roles.join(', ') || 'Not specified'}</dd>
+          </div>
+          <div>
+            <dt>Locations</dt>
+            <dd>{c.preferences.locations.join(', ') || 'Not specified'}</dd>
+          </div>
+          <div>
+            <dt>Work arrangement</dt>
+            <dd>
+              {[...c.preferences.workModes, ...c.preferences.jobTypes].join(' · ') ||
+                'Not specified'}
+            </dd>
+          </div>
+          <div>
+            <dt>Availability</dt>
+            <dd>
+              {c.preferences.availableDays === null
+                ? 'Not specified'
+                : c.preferences.availableDays === 0
+                  ? 'Available immediately'
+                  : `Within ${c.preferences.availableDays} days`}
+            </dd>
+          </div>
+        </dl>
       </section>
       <section className="profile-section">
         <h3>Profile evidence</h3>
@@ -1438,30 +1809,65 @@ function CandidateProfile({
             <Tag key={s}>{s}</Tag>
           ))}
         </div>
-        {c.records.map((r) => (
-          <article className="live-evidence" key={r.id}>
-            <h4>{r.section.replaceAll('_', ' ')}</h4>
-            {Object.entries(r.details).map(([key, value]) => (
-              <p key={key}>
-                <strong>{key.replaceAll('_', ' ')}:</strong>{' '}
-                {Array.isArray(value) ? value.join(', ') : String(value ?? '')}
-              </p>
-            ))}
-            <small>
-              {r.method.replaceAll('_', ' ')} · {r.status} · Checked {labelDate(r.checkedAt)}
-            </small>
-          </article>
-        ))}
+        <div className="candidate-evidence-list">
+          {c.records.map((r) => (
+            <details
+              className="candidate-evidence"
+              key={r.id}
+              open={['work_experience_entries', 'experience', 'experiences'].includes(r.section)}
+            >
+              <summary>
+                <span>
+                  <span className="candidate-eyebrow">
+                    {['work_experience_entries', 'experiences'].includes(r.section)
+                      ? 'Work experience'
+                      : r.section.replaceAll('_', ' ')}
+                  </span>
+                  <strong>
+                    {String(
+                      r.details.title ||
+                        r.details.name ||
+                        r.details.value ||
+                        r.details.degree ||
+                        'Profile record',
+                    )}
+                  </strong>
+                </span>
+                <Tag>{r.method.replaceAll('_', ' ')}</Tag>
+              </summary>
+              <dl className="candidate-record-details">
+                {Object.entries(r.details)
+                  .filter(([, value]) => value !== null && value !== '')
+                  .map(([key, value]) => (
+                    <div key={key}>
+                      <dt>{key.replaceAll('_', ' ')}</dt>
+                      <dd>{Array.isArray(value) ? value.join(', ') : String(value ?? '')}</dd>
+                    </div>
+                  ))}
+              </dl>
+              <small className="candidate-evidence-meta">
+                {r.method.replaceAll('_', ' ')} · {r.status} · Checked {labelDate(r.checkedAt)}
+              </small>
+            </details>
+          ))}
+        </div>
+        {!c.records.length && <p>No profile evidence shared yet.</p>}
         <p className="tiny muted">
           Source checked means the supplied source supports that fact; it does not mean the issuing
           authority confirmed it.
         </p>
       </section>
-      <label className="field">
+      <label className="field candidate-note">
         Private team note
-        <textarea maxLength={5000} value={note} onChange={(e) => setNote(e.target.value)} />
+        <textarea
+          rows={3}
+          placeholder="Add context for your hiring team…"
+          maxLength={5000}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
       </label>
-      <div className="row wrap">
+      <div className="candidate-actions">
         <Button disabled={busy || !job} onClick={() => void review(c, c.stage, note)}>
           Save note
         </Button>
@@ -1487,7 +1893,7 @@ function CandidateProfile({
       <p className="tiny muted">
         Decisions update the pipeline. Send a separate message to notify the candidate.
       </p>
-    </>
+    </div>
   );
 }
 

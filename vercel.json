@@ -5,6 +5,6 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/", "destination": "/index.html" },
-    { "source": "/:page(jobs|candidates|pipeline|messages|copilot|settings)", "destination": "/index.html" }
+    { "source": "/:page(jobs|candidates|pipeline|messages|copilot|activity|settings)", "destination": "/index.html" }
   ]
 }

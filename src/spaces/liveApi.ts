@@ -69,7 +69,17 @@ export interface WorkspaceData {
     shortlisted: number;
     conversations: number;
   };
-  activity: { id: number; text: string; created_at: string }[];
+  activity: {
+    id: number;
+    text: string;
+    created_at: string;
+    event_type?: string;
+    actor_name?: string;
+    candidate_name?: string;
+    job_title?: string;
+    previous_stage?: string;
+    new_stage?: string;
+  }[];
   members: { id: number; display_name: string; role: string }[];
   sharedViews: SharedView[];
   copilotConfigured: boolean;
@@ -94,8 +104,11 @@ export class SpacesClient {
   constructor(host: string) {
     this.host = host;
   }
-  async request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async request<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
     const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) controller.abort();
     const timeout = setTimeout(() => controller.abort(), path.includes('copilot') ? 110000 : 20000);
     try {
       const response = await fetch(`${this.host.replace(/\/$/, '')}/spaces/${path}`, {
@@ -134,6 +147,7 @@ export class SpacesClient {
         this.csrf = value.csrfToken;
       return value as T;
     } catch (error) {
+      if (signal?.aborted) throw error;
       if (error instanceof Error && error.name === 'AbortError')
         throw new Error(
           'The request timed out. Refresh to check whether it completed before retrying.',
@@ -141,6 +155,7 @@ export class SpacesClient {
       throw error;
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', cancel);
     }
   }
 }
