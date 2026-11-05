@@ -20,10 +20,12 @@ import {
   type WorkspaceData,
 } from './liveApi';
 import { ActivityLog } from './ActivityLog.web';
+import { JobCollection } from './JobCollection.web';
 import { useDebouncedSearch } from './useDebouncedSearch';
 import { isThemeId, themes, type ThemeId } from './themes';
 
 const pageDescriptions: Record<string, string> = {
+  'Job collection': 'Collect jobs, monitor source freshness and control your collection agents.',
   Overview: 'Your jobs, shortlist and next steps in one place.',
   Jobs: 'Define the role. Set clear requirements. Find the right match.',
   Messages: 'Keep candidate conversations connected to the role.',
@@ -32,6 +34,7 @@ const pageDescriptions: Record<string, string> = {
   Settings: 'Manage your team and make this workspace your own.',
 };
 const navPaths: Record<string, string> = {
+  'Job collection': 'M3 4h18v5H3z M3 12h8v8H3z M15 12h6 M15 16h6 M15 20h6',
   Overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   Jobs: 'M8 6V3h8v3 M3 7h18v14H3z M3 12h18 M10 12v3h4v-3',
   Candidates:
@@ -69,8 +72,9 @@ const pages = [
   'Hiring copilot',
   'Activity log',
   'Settings',
+  'Job collection',
 ];
-const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings'];
+const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings', 'collection'];
 const labelDate = (s: string) =>
   new Date(s).toLocaleString(undefined, {
     month: 'short',
@@ -897,7 +901,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               <div className="page-actions">
                 {['Overview', 'Candidates', 'Pipeline', 'Hiring copilot'].includes(page) &&
                   selector}
-                {page !== 'Activity log' && (
+                {!['Activity log', 'Job collection'].includes(page) && (
                   <Button disabled={loading || busy} onClick={() => void run(() => reload(jobId))}>
                     Refresh
                   </Button>
@@ -973,6 +977,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 </div>
               </>
             )}
+            {page === 'Job collection' && org && <JobCollection key={org} api={api} org={org} />}
             {page === 'Activity log' && org && <ActivityLog key={org} api={api} org={org} />}
             {page === 'Jobs' && (
               <>

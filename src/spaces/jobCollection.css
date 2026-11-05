@@ -1,0 +1,28 @@
+.collection-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; min-width: 0; }
+.collection-page > *, .collection-panel { min-width: 0; box-sizing: border-box; }
+.collection-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.collection-stats > div, .collection-panel { border: 1px solid var(--border, #d8dfdf); border-radius: 16px; padding: 22px; background: var(--surface, #fff); }
+.collection-stats strong { font-size: 28px; display: block; }
+.collection-stats span, .collection-note { font-size: 13px; opacity: .8; }
+.collection-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: end; }
+.collection-page label { display: grid; gap: 8px; font-size: 13px; }
+.collection-page input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; border: 1px solid var(--border, #b6c5c5); border-radius: 8px; color: inherit; background: transparent; }
+.collection-source { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--border, #d8dfdf); }
+.collection-page h3 { margin: 0 0 8px; }
+.collection-actions, .collection-search { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.collection-search { align-items: end; }
+.collection-search label { flex: 1; }
+.collection-table { overflow-x: auto; max-width: 100%; }
+.collection-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.collection-table td, .collection-table th { padding: 12px; border-bottom: 1px solid var(--border, #d8dfdf); }
+.collection-table small { display: block; margin-top: 6px; }
+.collection-error { color: #aa3027; overflow-wrap: anywhere; }
+.collection-jobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.collection-jobs article { padding: 18px; border: 1px solid var(--border, #d8dfdf); border-radius: 12px; min-width: 0; }
+.collection-jobs a { color: inherit; }
+.collection-jobs details { margin-top: 16px; }
+.collection-jobs summary { cursor: pointer; }
+.collection-description { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.collection-jobs pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font-size: 12px; }
+@media (max-width: 800px) { .collection-stats, .collection-form, .collection-jobs { grid-template-columns: repeat(2, minmax(0, 1fr)); } .collection-source { align-items: start; flex-direction: column; } }
+@media (max-width: 520px) { .collection-form, .collection-jobs { grid-template-columns: 1fr; } .collection-panel { padding: 14px; } }
