@@ -4,7 +4,18 @@ Standalone employer frontend for Kormic Spaces: company sign-in, overview, jobs,
 candidate profiles and fit ranking, hiring pipeline, messages, hiring copilot,
 team settings, shared views, searchable activity logs, and theme selection.
 
-This repository contains only the employer web application. It does not contain
+The main route restores the company workspace. `/admin` contains the separate
+Kormic portal administration console, including automated collection, job data,
+search-agent monitoring, portal users, admin copilot, activity, and Apify budgets.
+Company registration never creates a portal administrator. Company APIs require
+organization membership; admin APIs require an active staff account.
+
+Company login uses `/spaces/session/`; administrator login uses
+`/spaces/admin/session/`. Both retain CSRF protection. They share Django's browser
+session, so signing in as a different account changes the active browser identity.
+Careers candidates keep their separate bearer-token authentication.
+
+This repository contains the Spaces web application. It does not contain
 the Careers candidate app, Django backend, databases, credentials, or prototype
 fixtures. It calls the existing shared Django Spaces API. The Careers repository
 is independent; future Spaces frontend changes belong here.
@@ -22,6 +33,10 @@ Open `http://localhost:8082`. Vite proxies `/spaces/` to Django, while employer 
 routes are `/`, `/jobs`, `/candidates`, `/pipeline`, `/messages`, `/copilot`, and
 `/activity`, and `/settings`. Keep `localhost` consistent across both services. Add
 `http://localhost:8082` to Django's CSRF trusted origins if not already present.
+Open `/admin` for administrator sign-in; admin deep links stay below `/admin/`.
+Old unambiguous administration routes (`/collection`, `/planner`, `/users`, and
+`/overview`) redirect into that prefix. `/messages`, `/pipeline`, `/copilot`, and
+`/activity` belong to the company workspace again.
 Use an existing employer account or Create a company workspace. No account or
 password is embedded in this frontend.
 
@@ -48,6 +63,9 @@ Import this repository with framework **Vite**, root directory **.**, build
 command **npm run build**, and output directory **dist**. `vercel.json` includes
 deep-link rewrites for the employer pages, and deliberately does not rewrite API
 requests to HTML. No Vercel deployment has been created by this extraction.
+The rewrites also serve `/admin` and its child routes from the frontend. Do not
+proxy `/admin` on the Spaces host to Django's built-in operator admin; that
+separate tool remains on the backend host. Proxy `/spaces/` for the shared API.
 
 Before publishing a working environment, configure access to the shared Django
 backend. Recommended: leave `VITE_API_HOST` empty and prepend this rewrite to

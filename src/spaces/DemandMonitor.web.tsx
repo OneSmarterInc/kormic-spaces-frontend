@@ -1,8 +1,10 @@
+import { WeeklyCoverage, type CoverageState } from './WeeklyCoverage.web';
 import { useState } from 'react';
 import { CollectionPulse, RecentRuns, type RunSummary } from './OperationsStatus.web';
 import type { SpacesClient } from './liveApi';
 import { AdminTable, displayDate } from './AdminTable.web';
 export interface AgentState {
+  weekly_coverage?: CoverageState;
   apify_budget?: { configured: boolean; monthly_limit_usd: number; reserved_usd: number; remaining_usd: number; daily_limit_usd: number; run_limit_usd: number };
   resource_status: { allowed?: boolean; reason?: string; available_mb?: number; cpu_percent?: number; checked_at?: string };
   collection_limits: { running: number; queued: number; sources: number };
@@ -56,6 +58,7 @@ export function DemandMonitor({ api, state, stale, onChanged, onViewJobs }: {
           <button onClick={() => { setError(''); onChanged(); }}>Dismiss and check status</button>
         </p>
       )}
+      <WeeklyCoverage data={state?.weekly_coverage} />
       <section className="agent-console" aria-label="Search agent operations">
         <header>
           <div><h2>Automatic discovery</h2><p>Demand-led planning and job collection</p></div>
@@ -66,7 +69,7 @@ export function DemandMonitor({ api, state, stale, onChanged, onViewJobs }: {
         </header>
         <div className="agent-current" role="status">
           <strong>{!state ? 'Connecting to search agent…' : !state.profiles_enabled ? 'Automatic planning is paused' : state.planner_status === 'thinking' ? 'Reviewing Careers demand' : state.planner_status === 'failed' ? 'Planning needs attention' : state.planner_status === 'idle' ? 'Waiting for demand signals' : state.planner_status === 'completed' ? 'Search plan ready' : 'Waiting for the next planning cycle'}</strong>
-          <p>{!state ? 'Loading the latest recorded status.' : !state.profiles_enabled ? 'Manual schedules and work already queued may continue.' : state.planner_status === 'thinking' ? 'Evaluating chat requests, profile preferences, job interest and catalog coverage to select searches.' : 'The agent selects role and location searches from Careers demand. Recorded selection reasons appear in the search table below.'}</p>
+          <p>{!state ? 'Loading the latest recorded status.' : !state.profiles_enabled ? 'Manual schedules, weekly coverage and work already queued may continue.' : state.planner_status === 'thinking' ? 'Evaluating chat requests, profile preferences, job interest and catalog coverage to select searches.' : 'The agent selects role and location searches from Careers demand. Recorded selection reasons appear in the search table below.'}</p>
         </div>
         <dl className="agent-facts">
           <div><dt>Demand combinations</dt><dd>{state?.profile_pair_count ?? '—'}</dd></div>

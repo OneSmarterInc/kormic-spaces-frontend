@@ -2,6 +2,7 @@ import { displayDate } from './AdminTable.web';
 export interface RunSummary {
   id: string;
   source__query: string;
+  parameters?: { query?: string; location?: string };
   source__location: string;
   status: string;
   fetched: number;
@@ -30,7 +31,7 @@ export function CollectionPulse({
             {!healthy
               ? 'Worker not reporting'
               : active
-                ? `Collecting ${active.source__query}`
+                ? `Collecting ${active.parameters?.query ?? active.source__query}`
                 : deferredReason ? 'Collection deferred' : 'Collector ready'}
           </strong>
           <p>
@@ -78,7 +79,7 @@ export function RecentRuns({ runs, onView }: { runs: RunSummary[]; onView: () =>
             <div className="recent-row" key={run.id}>
               <span className={`run-dot status-${run.status}`} />
               <div>
-                <strong>{run.source__query}</strong>
+                <strong>{run.parameters?.query ?? run.source__query}</strong>
                 <small>{run.source__location}</small>
               </div>
               <span className={`admin-badge status-${run.status}`}>{run.status}</span>

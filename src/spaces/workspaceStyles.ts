@@ -1824,4 +1824,19 @@ input[type='checkbox'] {
 .candidate-table-wrap[aria-busy='true'] tbody {
   opacity: 0.6;
 }
+
+/* Company workspace shares the administration palette and compact navigation. */
+:host{--ink:#253244;--muted:#5c6879;--line:#dde3eb;--bg:#f3f5f8;font-family:"Segoe UI",Arial,sans-serif}
+:host([data-theme="portal"]) .workspace-sidebar{background:#fff;color:var(--ink);border-right:1px solid var(--line)}
+:host([data-theme="portal"]) .home-brand{color:#25394f}
+:host([data-theme="portal"]) .brand-mark,:host([data-theme="portal"]) .workspace-avatar{background:var(--wash);color:var(--accent);border-color:var(--line)}
+:host([data-theme="portal"]) .home-brand small,:host([data-theme="portal"]) .workspace-identity small,:host([data-theme="portal"]) .sidebar-bottom p{color:var(--muted)}
+:host([data-theme="portal"]) .workspace-identity{border-color:var(--line);background:#f8fafc}
+:host([data-theme="portal"]) .nav-item{color:#526178;border-radius:5px}
+:host([data-theme="portal"]) .nav-item:hover{background:#f3f5f8;color:var(--accent)}
+:host([data-theme="portal"]) .nav-item.active{background:var(--wash);color:#244f80;box-shadow:none}
+:host([data-theme="portal"]) .nav-item.active svg{color:inherit}
+:host([data-theme="portal"]) .sidebar-bottom .btn{color:var(--accent);border-color:var(--line);background:#fff}
+.nav-label{display:none}
+:host([data-theme="portal"]) .login-story{background:#25394f}
 `;

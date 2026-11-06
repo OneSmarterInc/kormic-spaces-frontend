@@ -1,4 +1,5 @@
 export const themes = [
+  { id: 'portal', name: 'Kormic Blue', description: 'The shared Kormic administration palette.', header: '#25394f', accent: '#294f7c', wash: '#eaf0f7' },
   {
     id: 'iris',
     name: 'Midnight & Iris',

@@ -9,6 +9,7 @@ import { DemandMonitor, type AgentState } from './DemandMonitor.web';
 import { OperationsCharts, type TrendPoint } from './OperationsCharts.web';
 import { spacesPagePath, spacesPageSegment } from './deployment';
 import { portalStyles } from './portalStyles';
+import { EmployerContacts } from './EmployerContacts.web';
 
 type Session = { authenticated: boolean; name: string };
 type Summary = AgentState & {
@@ -34,6 +35,7 @@ type Summary = AgentState & {
 const pages = {
   overview: 'Overview',
   collection: 'Job data',
+  contacts: 'Companies & contacts',
   planner: 'Search agents',
   users: 'Users',
   copilot: 'Admin copilot',
@@ -41,7 +43,7 @@ const pages = {
 };
 type Page = keyof typeof pages;
 const currentPage = (): Page => {
-  const path = spacesPageSegment(location.pathname);
+  const path = spacesPageSegment(location.pathname).replace(/^admin(?:\/|$)/, '') || 'overview';
   return path in pages ? (path as Page) : 'overview';
 };
 const failure = (e: unknown) =>
@@ -59,7 +61,7 @@ export function PortalConsole() {
   useEffect(() => {
     const controller = new AbortController();
     api
-      .request<Session>('session/', 'GET', undefined, controller.signal)
+      .request<Session>('admin/session/', 'GET', undefined, controller.signal)
       .then(setSession)
       .catch((e) => {
         if (!controller.signal.aborted) setError(failure(e));
@@ -113,7 +115,7 @@ export function PortalConsole() {
   }, [api, session?.authenticated, revision]);
   function navigate(next: Page) {
     setPage(next);
-    history.pushState({}, '', spacesPagePath(next));
+    history.pushState({}, '', spacesPagePath(next === 'overview' ? 'admin' : `admin/${next}`));
   }
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -131,7 +133,7 @@ export function PortalConsole() {
     const form = new FormData(event.currentTarget);
     void run(async () => {
       setSession(
-        await api.request<Session>('session/', 'POST', {
+        await api.request<Session>('admin/session/', 'POST', {
           action: 'login',
           email: form.get('email'),
           password: form.get('password'),
@@ -145,8 +147,7 @@ export function PortalConsole() {
       <div className="portal-login">
         {styles}
         <section>
-          <span className="portal-eyebrow">KORMIC / ADMINISTRATION</span>
-          <h1>Spaces</h1>
+          <h1>Kormic Administration</h1>
           <p>The control room for Kormic Careers.</p>
           <form onSubmit={signIn}>
             <label>
@@ -158,7 +159,7 @@ export function PortalConsole() {
               <input name="password" type="password" autoComplete="current-password" required />
             </label>
             <button disabled={busy || !session} type="submit">
-              {busy ? 'Signing in…' : 'Sign in to Spaces'}
+              {busy ? 'Signing in…' : 'Sign in as administrator'}
             </button>
           </form>
           {error && <p role="alert">{error}</p>}
@@ -204,6 +205,7 @@ export function PortalConsole() {
                     {
                       overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
                       collection: 'M4 7h16v14H4z M8 7V3h8v4 M4 12h16 M10 12v3h4v-3',
+                      contacts: 'M4 21V3h12v18 M8 7h4 M8 11h4 M8 15h4 M16 9h4v12 M2 21h20',
                       planner: 'M8 3h8v4H8z M3 17h6v4H3z M15 17h6v4h-6z M12 7v5 M6 17v-5h12v5',
                       users: 'M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
                       copilot: 'M4 4h16v12H9l-5 4z M8 8h8 M8 12h5',
@@ -223,7 +225,7 @@ export function PortalConsole() {
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                setSession(await api.request<Session>('session/', 'POST', { action: 'logout' }));
+                setSession(await api.request<Session>('admin/session/', 'POST', { action: 'logout' }));
                 setSummary(undefined);
               })
             }
@@ -249,6 +251,8 @@ export function PortalConsole() {
                 ? 'Your portal, agents and data at a glance.'
                 : page === 'collection'
                   ? 'Browse collected jobs, collection history and search schedules.'
+                  : page === 'contacts'
+                    ? 'Review employer identity, contact purpose and source evidence.'
                   : page === 'planner'
                     ? 'Review search decisions and control automatic discovery.'
                     : page === 'users'
@@ -258,7 +262,7 @@ export function PortalConsole() {
                         : 'A record of administrative actions across the portal.'}
             </p>
           </div>
-          <div className="page-status">
+          {page !== 'contacts' && <div className="page-status">
             <span className={summary?.worker_healthy ? 'portal-status good' : 'portal-status'}>
               {summary?.worker_healthy ? 'Worker connected' : 'Worker not reporting'}
             </span>
@@ -267,7 +271,7 @@ export function PortalConsole() {
                 ? `Updated ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
                 : 'Connecting…'}
             </small>
-          </div>
+          </div>}
         </div>
         {error && (
           <div className="portal-alert" role="alert">
@@ -342,6 +346,7 @@ export function PortalConsole() {
         {page === 'planner' && <DemandMonitor api={api} state={summary} stale={Boolean(error)} onChanged={() => setRevision((n) => n + 1)} onViewJobs={() => navigate('collection')} />}
         {page === 'users' && <AdminTable resource="users" api={api} />}
         {page === 'activity' && <AdminTable resource="activity" api={api} />}
+        {page === 'contacts' && <EmployerContacts api={api} />}
         <AdminCopilot
           api={api}
           visible={page === 'copilot'}

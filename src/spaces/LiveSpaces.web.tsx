@@ -20,7 +20,6 @@ import {
   type WorkspaceData,
 } from './liveApi';
 import { ActivityLog } from './ActivityLog.web';
-import { JobCollection } from './JobCollection.web';
 import { useDebouncedSearch } from './useDebouncedSearch';
 import { isThemeId, themes, type ThemeId } from './themes';
 
@@ -72,9 +71,8 @@ const pages = [
   'Hiring copilot',
   'Activity log',
   'Settings',
-  'Job collection',
 ];
-const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings', 'collection'];
+const paths = ['', 'jobs', 'candidates', 'pipeline', 'messages', 'copilot', 'activity', 'settings'];
 const labelDate = (s: string) =>
   new Date(s).toLocaleString(undefined, {
     month: 'short',
@@ -374,13 +372,32 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const [teamOpen, setTeamOpen] = useState(false);
   const [theme, setTheme] = useState<ThemeId>(() => {
     try {
-      const saved = localStorage.getItem('spaces-theme');
-      return isThemeId(saved) ? saved : 'iris';
+      const saved = localStorage.getItem('spaces-company-theme');
+      return isThemeId(saved) ? saved : 'portal';
     } catch {
-      return 'iris';
+      return 'portal';
     }
   });
   const org = session?.organizations[0]?.id;
+  useEffect(() => {
+    if (!org || page !== 'Messages') return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function refreshMessages() {
+      try {
+        if (!document.hidden) {
+          const value = await api.request<Conversation[]>(`${org}/messages/`, 'GET', undefined, controller.signal);
+          if (!controller.signal.aborted) setThreads(value);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) setError(errorText(error));
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(() => void refreshMessages(), 5000);
+      }
+    }
+    void refreshMessages();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [api, org, page]);
   const job = data?.jobs.find((j) => j.id === jobId) ?? data?.jobs[0];
   const candidateScope = JSON.stringify([org, jobId, candidateQuery, stageFilter]);
   const candidateKey = JSON.stringify([candidateScope, sort, pageSize]);
@@ -505,7 +522,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     host.style.setProperty('--palette-accent', palette.accent);
     host.style.setProperty('--palette-wash', palette.wash);
     try {
-      localStorage.setItem('spaces-theme', theme);
+      localStorage.setItem('spaces-company-theme', theme);
     } catch {
       /* Theme still works for this session. */
     }
@@ -977,7 +994,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 </div>
               </>
             )}
-            {page === 'Job collection' && org && <JobCollection key={org} api={api} org={org} />}
+
             {page === 'Activity log' && org && <ActivityLog key={org} api={api} org={org} />}
             {page === 'Jobs' && (
               <>
@@ -1946,9 +1963,15 @@ function ConversationPanel({
           maxLength={5000}
           value={text}
           onChange={(e) => setText(e.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              if (!busy && text.trim()) event.currentTarget.form?.requestSubmit();
+            }
+          }}
           placeholder="Write a thoughtful message…"
         />
-        <button className="btn primary" disabled={busy}>
+        <button className="btn primary" disabled={busy || !text.trim()}>
           Send message
         </button>
       </form>

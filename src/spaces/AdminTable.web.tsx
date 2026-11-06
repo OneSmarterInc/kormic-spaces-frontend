@@ -10,6 +10,7 @@ interface Row {
   person_id?: string;
   title?: string;
   company?: string;
+  source?: string;
   location?: string;
   description?: string;
   url?: string;
@@ -62,7 +63,7 @@ const titles: Record<Resource, string> = {
   activity: 'Audit trail',
 };
 const columns: Record<Resource, string[]> = {
-  catalog: ['Job title', 'Company', 'Location', 'Posted', 'Last collected', 'Visibility', ''],
+  catalog: ['Job title', 'Company', 'Location', 'Platform', 'Posted', 'Last collected', 'Visibility', ''],
   runs: ['Search', 'Status', 'Results', 'Added', 'Queued', ''],
   sources: ['Search', 'Type', 'Status', 'Frequency', 'Next run', 'Latest run', ''],
   plans: ['Search', 'Status', 'Demand', 'Frequency', 'Next run', 'Latest run', ''],
@@ -70,7 +71,7 @@ const columns: Record<Resource, string[]> = {
   activity: ['Action', 'Administrator', 'Date'],
 };
 const columnSorts: Record<Resource, string[]> = {
-  catalog: ['name', 'company', 'location', 'posted', 'recent', 'visibility', ''],
+  catalog: ['name', 'company', 'location', 'platform', 'posted', 'recent', 'visibility', ''],
   runs: ['name', 'status', 'results', 'added', 'recent', ''],
   sources: ['name', 'type', 'status', 'frequency', 'next', 'outcome', ''],
   plans: ['name', 'status', 'priority', 'frequency', 'next', 'outcome', ''],
@@ -245,8 +246,9 @@ export function AdminTable({
           <td className="primary-cell">{row.title}</td>
           <td>{row.company || '—'}</td>
           <td>{row.location || '—'}</td>
+          <td>{({ linkedin: 'LinkedIn', indeed: 'Indeed', monster: 'Monster' } as Record<string, string>)[row.source ?? ''] ?? '—'}</td>
           <td className="nowrap">{displayDate(row.posted_date)}</td>
-          <td className="nowrap">{displayDate(row.last_seen_at)}</td>
+          <td className="nowrap"><time dateTime={row.last_seen_at}>{displayDate(row.last_seen_at).split(', ').map((part, index) => <span key={index}>{part}</span>)}</time></td>
           <td>{badge(row.published ? 'Published' : 'Private')}</td>
           <td>{actions(row)}</td>
         </>
@@ -390,9 +392,10 @@ export function AdminTable({
           {notice}
         </p>
       )}
-      <div className="admin-table-scroll" aria-busy={loading}>
-        <table className="admin-table">
+      <div className="admin-table-scroll" aria-busy={loading} tabIndex={0} role="region" aria-label={`${titles[resource]} table`}>
+        <table className={`admin-table${resource === 'catalog' ? ' catalog-table' : ''}`}>
           <caption className="sr-only">{titles[resource]}</caption>
+          {resource === 'catalog' && <colgroup>{[24, 14, 16, 9, 9, 13, 8, 7].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>}
           <thead>
             <tr>
               {columns[resource].map((label, index) => {
