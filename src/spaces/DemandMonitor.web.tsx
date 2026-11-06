@@ -3,6 +3,7 @@ import { CollectionPulse, RecentRuns, type RunSummary } from './OperationsStatus
 import type { SpacesClient } from './liveApi';
 import { AdminTable, displayDate } from './AdminTable.web';
 export interface AgentState {
+  apify_budget?: { configured: boolean; monthly_limit_usd: number; reserved_usd: number; remaining_usd: number; daily_limit_usd: number; run_limit_usd: number };
   resource_status: { allowed?: boolean; reason?: string; available_mb?: number; cpu_percent?: number; checked_at?: string };
   collection_limits: { running: number; queued: number; sources: number };
   recent_runs: RunSummary[];
@@ -79,6 +80,11 @@ export function DemandMonitor({ api, state, stale, onChanged, onViewJobs }: {
         Collection limits: {state.collection_limits?.running ?? 1} concurrent · {state.collection_limits?.queued ?? 20} queued · {state.collection_limits?.sources ?? 400} searches.
         {state.resource_status?.available_mb !== undefined && ` Available RAM: ${state.resource_status.available_mb} MB. CPU: ${state.resource_status.cpu_percent}%.`}
         {state.resource_status?.reason && ` ${state.resource_status.reason}`}
+      </p>}
+      {state?.apify_budget && <p className="admin-notice">
+        Monster · Apify: {state.apify_budget.configured ? `$${state.apify_budget.remaining_usd.toFixed(2)} available of $${state.apify_budget.monthly_limit_usd.toFixed(2)} this month` : 'API token not configured'}.
+        {' '}Daily limit ${state.apify_budget.daily_limit_usd.toFixed(2)} · Per run ${state.apify_budget.run_limit_usd.toFixed(2)}.
+        {' '}Budget includes reserved run limits; actual charges may be lower.
       </p>}
       {state && <CollectionPulse runs={state.current_run ? [state.current_run] : []} statuses={{...state.collection_status, ...state.queue_status}} healthy={state.worker_healthy} deferredReason={state.resource_status?.reason} />}
       {state?.planner_error && (

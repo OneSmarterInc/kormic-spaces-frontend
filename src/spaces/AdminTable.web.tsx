@@ -28,7 +28,7 @@ interface Row {
   hours?: number;
   limit?: number;
   status?: string;
-  parameters?: { query?: string; location?: string };
+  parameters?: { query?: string; location?: string; source_results?: Record<string, {status: string; fetched: number; reason?: string; cost_usd?: number; reserved_usd?: number; filtered?: number}> };
   fetched?: number;
   created?: number;
   updated?: number;
@@ -523,7 +523,7 @@ export function AdminTable({
                 {detail.description || 'No description provided.'}
               </div>
               {detail.url &&
-                /^https:\/\/www\.linkedin\.com\/jobs\/view\/\d+\/$/.test(detail.url) && (
+                /^https:\/\/(?:www\.linkedin\.com\/jobs\/view\/\d+\/|www\.indeed\.com\/viewjob\?jk=[A-Za-z0-9_-]{1,100}|www\.monster\.com\/job-openings\/[A-Za-z0-9_-]{1,1500})$/.test(detail.url) && (
                   <a
                     className="admin-external"
                     href={detail.url}
@@ -548,6 +548,12 @@ export function AdminTable({
                 <dt>Completed</dt>
                 <dd>{displayDate(detail.finished_at)}</dd>
               </dl>
+              {detail.parameters?.source_results && <dl>{Object.entries(detail.parameters.source_results).map(([site, result]) => <div key={site}><dt>{site}</dt><dd>{result.status} · {result.fetched} retrieved
+                  {result.filtered !== undefined && ` · ${result.filtered} filtered`}
+                  {result.cost_usd !== undefined && ` · $${result.cost_usd.toFixed(5)} charged`}
+                  {result.reserved_usd !== undefined && ` · $${result.reserved_usd.toFixed(2)} reserved`}
+                  {result.reason && ` · ${result.reason.replaceAll('_', ' ')}`}
+                </dd></div>)}</dl>}
               {detail.error && <p className="portal-alert">{detail.error}</p>}
             </>
           ) : (
