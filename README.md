@@ -95,3 +95,24 @@ prove production API availability.
 References: [Vite on Vercel](https://vercel.com/docs/frameworks/frontend/vite),
 [external rewrites](https://vercel.com/docs/routing/rewrites), and
 [Vite environment variables](https://vite.dev/guide/env-and-mode).
+
+## Production artifact ownership
+
+The backend `deploy/compose.spaces.yaml` builds this standalone repository via
+`SPACES_FRONTEND_DIR`. Set `SPACES_REVISION` to this checkout's exact commit SHA;
+the image records it with the GitHub source URL in OCI labels. Run the base backend
+Compose file plus this overlay, with `PUBLIC_URL`, `SPACES_PUBLIC_URL` and
+`SPACES_PUBLIC_HOST` configured. TLS terminates at the trusted load balancer.
+The browser uses same-origin `/spaces/` and `/api/` proxies to the shared backend.
+
+The Careers `EXPO_PUBLIC_APP_VARIANT=spaces` export is a legacy compatibility path,
+not the production Spaces deployment. New Spaces releases must build this repo.
+The mirrored components remain temporarily for existing Careers routes/tests;
+removing those routes is a separate compatibility change.
+
+Invitations require the backend `SPACES_PUBLIC_URL` and working encrypted SMTP.
+Invitation links expire in 48 hours; password reset links expire in one hour.
+Existing users sign in to accept membership without changing their password.
+Reset/change invalidates previous Django sessions. Tokens are held in URL fragments,
+removed from history after loading, and stored server-side only as keyed digests.
+Run backend migrations before releasing the new frontend contracts.

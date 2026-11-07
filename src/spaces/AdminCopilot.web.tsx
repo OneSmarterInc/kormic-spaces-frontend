@@ -1,50 +1,18 @@
+import {
+  ChatHistory,
+  ChatHistoryStyles,
+  useChatHistory,
+  type ChatMessage,
+} from './ChatHistory.web';
+import { AssistantText } from './AssistantText.web';
 import { useEffect, useRef, useState } from 'react';
+import { LiveOperations } from './LiveOperations.web';
 import type { SpacesClient } from './liveApi';
 
-function AssistantText({ text }: { text: string }) {
-  const inline = (line: string) =>
-    line
-      .split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
-      .map((part, index) =>
-        part.startsWith('**') && part.endsWith('**') ? (
-          <strong key={index}>{part.slice(2, -2)}</strong>
-        ) : part.startsWith('`') && part.endsWith('`') ? (
-          <code key={index}>{part.slice(1, -1)}</code>
-        ) : (
-          part
-        ),
-      );
-  return (
-    <div className="assistant-copy">
-      {text.split(/\n\s*\n/).map((block, index) => {
-        const lines = block.split('\n');
-        return lines.every((line) => /^[-*]\s/.test(line)) ? (
-          <ul key={index}>
-            {lines.map((line, i) => (
-              <li key={i}>{inline(line.slice(2))}</li>
-            ))}
-          </ul>
-        ) : (
-          <p key={index}>{inline(block)}</p>
-        );
-      })}
-    </div>
-  );
-}
-
-type Message = {
-  id: string;
-  question: string;
-  answer: string;
-  source?: string;
-  status: 'pending' | 'completed' | 'failed';
-};
 export function AdminCopilot({
   api,
   visible,
   model,
-  jobs,
-  users,
 }: {
   api: SpacesClient;
   visible: boolean;
@@ -53,7 +21,7 @@ export function AdminCopilot({
   users?: number;
 }) {
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const pending = useRef(false),
     controller = useRef<AbortController | null>(null);
   const log = useRef<HTMLDivElement>(null),
@@ -63,31 +31,63 @@ export function AdminCopilot({
   useEffect(() => {
     if (stick.current && log.current) log.current.scrollTop = log.current.scrollHeight;
   }, [messages, visible]);
+  const [panel, setPanel] = useState<'context' | 'history'>('context');
+  const history = useChatHistory({
+    api,
+    path: 'admin/copilot/history/',
+    scope: 'admin',
+    setMessages,
+    waiting: messages.some((m) => m.status === 'pending') && !pending.current,
+  });
+  const newChat = () => {
+    if (pending.current || history.loading) return;
+    history.reset();
+    setDraft('');
+  };
   async function send() {
     const question = draft.trim();
-    if (!question || pending.current) return;
+    if (
+      !question ||
+      pending.current ||
+      history.loading ||
+      messages.some((m) => m.status === 'pending')
+    )
+      return;
+    const id = crypto.randomUUID();
     pending.current = true;
     stick.current = true;
-    const id = crypto.randomUUID();
     controller.current = new AbortController();
     setDraft('');
     setMessages((items) => [...items, { id, question, answer: '', status: 'pending' }]);
     if (input.current) input.current.style.height = 'auto';
     try {
-      const result = await api.request<{ answer: string; model?: { provider: string } }>(
+      const result = await api.request<{
+        answer: string;
+        conversationId?: string;
+        model?: { provider: string };
+      }>(
         'admin/copilot/',
         'POST',
-        { prompt: question, requestId: id },
+        { prompt: question, requestId: id, conversationId: history.active?.id },
         controller.current.signal,
       );
+      if (controller.current.signal.aborted) return;
+      history.recorded(result.conversationId, question);
       setMessages((items) =>
         items.map((m) =>
           m.id === id
-            ? { ...m, answer: result.answer, source: result.model?.provider, status: 'completed' }
+            ? {
+                ...m,
+                answer: result.answer,
+                source: result.model?.provider,
+                status: 'completed',
+              }
             : m,
         ),
       );
     } catch (error) {
+      if (controller.current.signal.aborted) return;
+      history.failed(error, question);
       if (!controller.current.signal.aborted)
         setMessages((items) =>
           items.map((m) =>
@@ -106,17 +106,40 @@ export function AdminCopilot({
       input.current?.focus();
     }
   }
-  const busy = messages.some((m) => m.status === 'pending');
+  const busy = history.loading || messages.some((m) => m.status === 'pending');
   return (
     <div className="copilot-layout" hidden={!visible}>
+      <ChatHistoryStyles />
       <section className="copilot-thread" aria-label="Admin conversation">
         <header className="copilot-thread-header">
           <div>
             <strong>Operations assistant</strong>
             <span>Read-only access to portal metrics</span>
           </div>
-          <span className="admin-badge">{model || 'Model not reported'}</span>
+          <div className="chat-header-actions">
+            <button
+              type="button"
+              aria-pressed={panel === 'context'}
+              onClick={() => setPanel('context')}
+            >
+              Live operations
+            </button>
+            <button
+              type="button"
+              aria-pressed={panel === 'history'}
+              onClick={() => setPanel('history')}
+            >
+              Chat history
+            </button>
+            <button type="button" disabled={busy} onClick={newChat}>
+              New chat
+            </button>
+          </div>
         </header>
+        <div className="chat-history-status" aria-live="polite">
+          {history.loading ? 'Opening chat…' : history.active?.title}
+        </div>
+        {history.error && <p role="alert">{history.error}</p>}
         <div
           className="copilot-log"
           role="log"
@@ -127,6 +150,11 @@ export function AdminCopilot({
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
           }}
         >
+          {history.nextOffset !== null && (
+            <button disabled={busy} onClick={() => void history.open(history.active!.id, true)}>
+              Load older messages
+            </button>
+          )}
           {!messages.length && (
             <div className="copilot-welcome">
               <div className="assistant-mark" aria-hidden="true">
@@ -156,14 +184,18 @@ export function AdminCopilot({
           )}
           {messages.map((message) => (
             <div className="copilot-exchange" key={message.id}>
-              <div className="copilot-message user-message">
-                <span>You</span>
+              <div
+                className="copilot-message user-message chat-user-bubble"
+                role="group"
+                aria-label="Your message"
+              >
                 <p>{message.question}</p>
               </div>
-              <div className="copilot-message assistant-message">
-                <span>
-                  {message.source === 'portal' ? 'Portal metrics' : 'Operations assistant'}
-                </span>
+              <div
+                className="copilot-message assistant-message chat-agent-reply"
+                role="group"
+                aria-label="Agent response"
+              >
                 {message.status === 'pending' ? (
                   <p role="status" className="copilot-pending">
                     Reviewing portal activity…
@@ -204,7 +236,9 @@ export function AdminCopilot({
           <textarea
             id="admin-question"
             ref={input}
-            rows={2}
+            rows={1}
+            readOnly={busy}
+            aria-busy={busy}
             maxLength={2000}
             value={draft}
             placeholder="Ask about your portal…"
@@ -228,25 +262,23 @@ export function AdminCopilot({
           </div>
         </form>
       </section>
-      <aside className="copilot-context">
-        <h2>Available context</h2>
-        <dl>
-          <dt>Collected jobs</dt>
-          <dd>{jobs?.toLocaleString() ?? '—'}</dd>
-          <dt>Careers users</dt>
-          <dd>{users?.toLocaleString() ?? '—'}</dd>
-        </dl>
-        <h3>What you can ask</h3>
-        <ul>
-          <li>Collection outcomes and failures</li>
-          <li>Search demand and agent decisions</li>
-          <li>Recommendation service activity</li>
-        </ul>
-        <p>
-          The assistant explains current metrics. Use the search controls to change collection
-          settings.
-        </p>
-      </aside>
+      {panel === 'history' ? (
+        <ChatHistory
+          api={api}
+          path="admin/copilot/history/"
+          activeId={history.active?.id}
+          disabled={busy}
+          version={history.version}
+          onOpen={(id) => {
+            setDraft('');
+            void history.open(id);
+          }}
+          onRename={history.renamed}
+          onDelete={history.deleted}
+        />
+      ) : (
+        <LiveOperations api={api} visible={visible} />
+      )}
     </div>
   );
 }

@@ -1,7 +1,30 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { SpacesClient } from './liveApi';
-export type Resource = 'catalog' | 'runs' | 'sources' | 'plans' | 'users' | 'activity';
-interface Row {
+export type Resource =
+  | 'catalog'
+  | 'runs'
+  | 'sources'
+  | 'plans'
+  | 'users'
+  | 'activity'
+  | 'companies'
+  | 'admins'
+  | 'admin_invites';
+export interface Row {
+  name?: string;
+  first_name?: string;
+  last_name?: string;
+  display_name?: string;
+  is_active?: boolean;
+  status_label?: string;
+  verification_status?: string;
+  member_count?: number;
+  last_activity?: string;
+  last_login?: string;
+  date_joined?: string;
+  company_name?: string;
+  account_label?: string;
+  expires_at?: string;
   id?: string | number;
   published?: boolean;
   latest_status?: string;
@@ -29,7 +52,23 @@ interface Row {
   hours?: number;
   limit?: number;
   status?: string;
-  parameters?: { query?: string; location?: string; source_results?: Record<string, {status: string; fetched: number; reason?: string; cost_usd?: number; reserved_usd?: number; filtered?: number}> };
+  degraded?: boolean;
+  source_failure_count?: number;
+  parameters?: {
+    query?: string;
+    location?: string;
+    source_results?: Record<
+      string,
+      {
+        status: string;
+        fetched: number;
+        reason?: string;
+        cost_usd?: number;
+        reserved_usd?: number;
+        filtered?: number;
+      }
+    >;
+  };
   fetched?: number;
   created?: number;
   updated?: number;
@@ -61,14 +100,29 @@ const titles: Record<Resource, string> = {
   plans: 'Search decisions',
   users: 'Careers users',
   activity: 'Audit trail',
+  companies: 'Company workspaces',
+  admins: 'Administrators',
+  admin_invites: 'Pending invitations',
 };
 const columns: Record<Resource, string[]> = {
-  catalog: ['Job title', 'Company', 'Location', 'Platform', 'Posted', 'Last collected', 'Visibility', ''],
+  catalog: [
+    'Job title',
+    'Company',
+    'Location',
+    'Platform',
+    'Posted',
+    'Last collected',
+    'Visibility',
+    '',
+  ],
   runs: ['Search', 'Status', 'Results', 'Added', 'Queued', ''],
   sources: ['Search', 'Type', 'Status', 'Frequency', 'Next run', 'Latest run', ''],
   plans: ['Search', 'Status', 'Demand', 'Frequency', 'Next run', 'Latest run', ''],
   users: ['User', 'Selected role', 'Location', 'Joined'],
-  activity: ['Action', 'Administrator', 'Date'],
+  companies: ['Company', 'Owner email', 'Status', 'Members', 'Last activity', 'Created'],
+  admins: ['Name', 'Email', 'Company', 'Account type', 'Status', 'Last sign-in', 'Joined', ''],
+  admin_invites: ['Name', 'Email', 'Status', 'Invited', 'Expires', ''],
+  activity: ['Action', 'Actor', 'Company', 'Account type', 'Date'],
 };
 const columnSorts: Record<Resource, string[]> = {
   catalog: ['name', 'company', 'location', 'platform', 'posted', 'recent', 'visibility', ''],
@@ -76,8 +130,25 @@ const columnSorts: Record<Resource, string[]> = {
   sources: ['name', 'type', 'status', 'frequency', 'next', 'outcome', ''],
   plans: ['name', 'status', 'priority', 'frequency', 'next', 'outcome', ''],
   users: ['name', 'role', 'location', 'recent'],
-  activity: ['action', 'actor', 'recent'],
+  companies: ['name', 'email', 'status', 'members', 'activity', 'recent'],
+  admins: ['name', 'email', 'company', 'account', 'status', 'activity', 'recent', ''],
+  admin_invites: ['name', 'email', 'status', 'recent', 'expires', ''],
+  activity: ['action', 'actor', 'company', 'account', 'recent'],
 };
+const tableWidths: Partial<Record<Resource, number[]>> = {
+  activity: [35, 21, 20, 10, 14],
+  users: [40, 22, 18, 20],
+  companies: [23, 23, 12, 8, 17, 17],
+  admins: [16, 22, 14, 9, 8, 11, 11, 9],
+  admin_invites: [20, 25, 12, 16, 17, 10],
+};
+const accountLabel = (value?: string) =>
+  ({
+    admin: 'Admin',
+    company: 'Company user',
+    careers: 'Careers user',
+    unknown: 'Not recorded',
+  })[value || 'unknown'] || value;
 const defaultSort = (resource: Resource) =>
   resource === 'plans' ? 'priority' : resource === 'sources' ? 'next' : 'recent';
 export const displayDate = (value?: string | null) =>
@@ -126,10 +197,12 @@ export function AdminTable({
   api,
   resource,
   revision = 0,
+  onManage,
 }: {
   api: SpacesClient;
   resource: Resource;
   revision?: number;
+  onManage?: (row: Row) => void;
 }) {
   const [page, setPage] = useState(1),
     [size, setSize] = useState(10),
@@ -137,6 +210,16 @@ export function AdminTable({
     [query, setQuery] = useState(''),
     [sort, setSort] = useState(defaultSort(resource)),
     [direction, setDirection] = useState<'asc' | 'desc'>(resource === 'sources' ? 'asc' : 'desc');
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setQuery(draft.trim());
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [draft]);
+  const [platform, setPlatform] = useState('');
+  const [company, setCompany] = useState('');
+  const [accountType, setAccountType] = useState('');
   const [loading, setLoading] = useState(true);
   const [updatedAt, setUpdatedAt] = useState<Date>();
   const [data, setData] = useState<Page>(),
@@ -158,7 +241,7 @@ export function AdminTable({
       inFlight = true;
       try {
         const result = await api.request<Page>(
-          `admin/table/${resource}/?${new URLSearchParams({ page: String(page), page_size: String(size), q: query, sort, direction })}`,
+          `admin/table/${resource}/?${new URLSearchParams({ page: String(page), page_size: String(size), q: query, sort, direction, platform, company_q: company, account_type: accountType })}`,
           'GET',
           undefined,
           controller.signal,
@@ -175,11 +258,13 @@ export function AdminTable({
         inFlight = false;
         if (!controller.signal.aborted) {
           setLoading(false);
-          timer = setTimeout(() => void load(), 5000);
+          timer = setTimeout(() => void load(), 30000);
         }
       }
     }
-    const resume = () => { if (!document.hidden) void load(); };
+    const resume = () => {
+      if (!document.hidden) void load();
+    };
     document.addEventListener('visibilitychange', resume);
     window.addEventListener('online', resume);
     void load();
@@ -189,7 +274,20 @@ export function AdminTable({
       controller.abort();
       clearTimeout(timer);
     };
-  }, [api, resource, page, size, query, sort, direction, refresh, revision]);
+  }, [
+    api,
+    resource,
+    page,
+    size,
+    query,
+    sort,
+    direction,
+    refresh,
+    revision,
+    company,
+    accountType,
+    platform,
+  ]);
   async function open(row: Row) {
     setDetail(row);
     if (resource !== 'catalog') return;
@@ -206,7 +304,10 @@ export function AdminTable({
   async function control(row: Row, action: string) {
     setBusy(true);
     try {
-      await api.request('admin/collection/', 'POST', { action, source_id: row.id });
+      await api.request('admin/collection/', 'POST', {
+        action,
+        source_id: row.id,
+      });
       setNotice('Search updated.');
       setDetail(undefined);
       setRefresh((n) => n + 1);
@@ -217,7 +318,7 @@ export function AdminTable({
     }
   }
   const statusOf = (row: Row) =>
-    row.status ??
+    (row.degraded ? 'Partial success' : row.status) ??
     (['one_time', 'on_demand'].includes(row.origin ?? '')
       ? (row.latest_status ?? 'queued')
       : !row.enabled
@@ -246,9 +347,25 @@ export function AdminTable({
           <td className="primary-cell">{row.title}</td>
           <td>{row.company || '—'}</td>
           <td>{row.location || '—'}</td>
-          <td>{({ linkedin: 'LinkedIn', indeed: 'Indeed', monster: 'Monster' } as Record<string, string>)[row.source ?? ''] ?? '—'}</td>
+          <td>
+            {(
+              {
+                linkedin: 'LinkedIn',
+                indeed: 'Indeed',
+                monster: 'Monster',
+              } as Record<string, string>
+            )[row.source ?? ''] ?? '—'}
+          </td>
           <td className="nowrap">{displayDate(row.posted_date)}</td>
-          <td className="nowrap"><time dateTime={row.last_seen_at}>{displayDate(row.last_seen_at).split(', ').map((part, index) => <span key={index}>{part}</span>)}</time></td>
+          <td className="nowrap">
+            <time dateTime={row.last_seen_at}>
+              {displayDate(row.last_seen_at)
+                .split(', ')
+                .map((part, index) => (
+                  <span key={index}>{part}</span>
+                ))}
+            </time>
+          </td>
           <td>{badge(row.published ? 'Published' : 'Private')}</td>
           <td>{actions(row)}</td>
         </>
@@ -273,7 +390,11 @@ export function AdminTable({
           <td className="primary-cell">
             {row.query}
             <small>{row.location}</small>
-            {resource === 'plans' && <small className="agent-selection-reason">{row.agent_reason || 'No selection reason recorded yet.'}</small>}
+            {resource === 'plans' && (
+              <small className="agent-selection-reason">
+                {row.agent_reason || 'No selection reason recorded yet.'}
+              </small>
+            )}
           </td>
           {resource === 'sources' ? (
             <td>
@@ -298,7 +419,11 @@ export function AdminTable({
               </small>
             </td>
           ) : null}
-          <td>{['one_time', 'on_demand'].includes(row.origin ?? '') ? 'Once' : `${row.interval_minutes} min`}</td>
+          <td>
+            {['one_time', 'on_demand'].includes(row.origin ?? '')
+              ? 'Once'
+              : `${row.interval_minutes} min`}
+          </td>
           <td className="nowrap">
             {row.enabled && (row.origin !== 'profile' || row.agent_approved)
               ? displayDate(row.next_run_at)
@@ -315,6 +440,42 @@ export function AdminTable({
             )}
           </td>
           <td>{actions(row)}</td>
+        </>
+      );
+    if (resource === 'companies')
+      return (
+        <>
+          <td className="primary-cell">{row.name}</td>
+          <td>{row.email || 'Not recorded'}</td>
+          <td>{row.verification_status}</td>
+          <td>{row.member_count}</td>
+          <td>{displayDate(row.last_activity)}</td>
+          <td>{displayDate(row.created_at)}</td>
+        </>
+      );
+    if (resource === 'admins' || resource === 'admin_invites')
+      return (
+        <>
+          <td className="primary-cell">
+            {row.full_name?.trim() || row.display_name || 'Name not recorded'}
+          </td>
+          <td>{row.email}</td>
+          {resource === 'admins' && (
+            <>
+              <td>{row.company_name}</td>
+              <td>{accountLabel(row.account_label)}</td>
+            </>
+          )}
+          <td>{badge(row.status_label || '')}</td>
+          <td>{displayDate(resource === 'admins' ? row.last_login : row.created_at)}</td>
+          <td>{displayDate(resource === 'admins' ? row.date_joined : row.expires_at)}</td>
+          <td>
+            {onManage && (
+              <button className="table-link" onClick={() => onManage(row)}>
+                {resource === 'admins' ? 'Manage' : 'Revoke'}
+              </button>
+            )}
+          </td>
         </>
       );
     if (resource === 'users')
@@ -337,7 +498,9 @@ export function AdminTable({
     return (
       <>
         <td className="primary-cell">{row.text}</td>
-        <td>{row.actor_name}</td>
+        <td>{row.actor_name || 'Not recorded'}</td>
+        <td>{row.company_name}</td>
+        <td>{accountLabel(row.account_label)}</td>
         <td className="nowrap">{displayDate(row.created_at)}</td>
       </>
     );
@@ -347,8 +510,15 @@ export function AdminTable({
   return (
     <section className="admin-data-panel" aria-label={titles[resource]}>
       <div className="admin-table-heading">
-        <h2>{titles[resource]} {data && <span className="table-total">{data.count.toLocaleString()}</span>}</h2>
-        {error && <span className="table-live is-stale" role="status">Updates interrupted · retrying</span>}
+        <h2>
+          {titles[resource]}{' '}
+          {data && <span className="table-total">{data.count.toLocaleString()}</span>}
+        </h2>
+        {error && (
+          <span className="table-live is-stale" role="status">
+            Updates interrupted · retrying
+          </span>
+        )}
       </div>
       <div className="admin-toolbar">
         <form
@@ -367,18 +537,65 @@ export function AdminTable({
             maxLength={160}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={
-              resource === 'users'
-                ? 'Search name or email'
-                : resource === 'activity'
-                  ? 'Search action or administrator'
-                  : 'Search role or location'
-            }
+            placeholder="Search all columns"
           />
-          <button className="secondary">Search</button>
         </form>
+        {resource === 'catalog' && (
+          <label>
+            Platform
+            <select
+              value={platform}
+              onChange={(e) => {
+                setPlatform(e.target.value);
+                setPage(1);
+              }}
+            >
+              <option value="">All platforms</option>
+              <option value="linkedin">LinkedIn</option>
+              <option value="indeed">Indeed</option>
+              <option value="monster">Monster</option>
+            </select>
+          </label>
+        )}
+        {resource === 'activity' && (
+          <>
+            <label>
+              Company
+              <input
+                type="search"
+                placeholder="Filter company name"
+                value={company}
+                maxLength={160}
+                onChange={(e) => {
+                  setCompany(e.target.value);
+                  setPage(1);
+                }}
+              />
+            </label>
+            <label>
+              Account type
+              <select
+                value={accountType}
+                onChange={(e) => {
+                  setAccountType(e.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All account types</option>
+                <option value="careers">Careers user</option>
+                <option value="company">Company user</option>
+                <option value="admin">Administrator</option>
+                <option value="unknown">Not recorded</option>
+              </select>
+            </label>
+          </>
+        )}
         <span className="table-count">
-          {loading ? 'Updating…' : updatedAt ? `Synced ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : 'No data'}
+          {loading
+            ? 'Updating…'
+            : updatedAt
+              ? `Synced ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+              : 'No data'}
         </span>
       </div>
       {error && (
@@ -392,10 +609,31 @@ export function AdminTable({
           {notice}
         </p>
       )}
-      <div className="admin-table-scroll" aria-busy={loading} tabIndex={0} role="region" aria-label={`${titles[resource]} table`}>
-        <table className={`admin-table${resource === 'catalog' ? ' catalog-table' : ''}`}>
+      <div
+        className="admin-table-scroll"
+        aria-busy={loading}
+        tabIndex={0}
+        role="region"
+        aria-label={`${titles[resource]} table`}
+      >
+        <table
+          className={`admin-table${resource === 'catalog' ? ' catalog-table' : ''}${tableWidths[resource] ? ' fixed-account-table' : ''}`}
+        >
           <caption className="sr-only">{titles[resource]}</caption>
-          {resource === 'catalog' && <colgroup>{[24, 14, 16, 9, 9, 13, 8, 7].map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>}
+          {tableWidths[resource] && (
+            <colgroup>
+              {tableWidths[resource]!.map((width, index) => (
+                <col key={index} style={{ width: `${width}%` }} />
+              ))}
+            </colgroup>
+          )}
+          {resource === 'catalog' && (
+            <colgroup>
+              {[24, 14, 16, 9, 9, 13, 8, 7].map((width, index) => (
+                <col key={index} style={{ width: `${width}%` }} />
+              ))}
+            </colgroup>
+          )}
           <thead>
             <tr>
               {columns[resource].map((label, index) => {
@@ -526,7 +764,9 @@ export function AdminTable({
                 {detail.description || 'No description provided.'}
               </div>
               {detail.url &&
-                /^https:\/\/(?:www\.linkedin\.com\/jobs\/view\/\d+\/|www\.indeed\.com\/viewjob\?jk=[A-Za-z0-9_-]{1,100}|www\.monster\.com\/job-openings\/[A-Za-z0-9_-]{1,1500})$/.test(detail.url) && (
+                /^https:\/\/(?:www\.linkedin\.com\/jobs\/view\/\d+\/|www\.indeed\.com\/viewjob\?jk=[A-Za-z0-9_-]{1,100}|www\.monster\.com\/job-openings\/[A-Za-z0-9_-]{1,1500})$/.test(
+                  detail.url,
+                ) && (
                   <a
                     className="admin-external"
                     href={detail.url}
@@ -551,12 +791,24 @@ export function AdminTable({
                 <dt>Completed</dt>
                 <dd>{displayDate(detail.finished_at)}</dd>
               </dl>
-              {detail.parameters?.source_results && <dl>{Object.entries(detail.parameters.source_results).map(([site, result]) => <div key={site}><dt>{site}</dt><dd>{result.status} · {result.fetched} retrieved
-                  {result.filtered !== undefined && ` · ${result.filtered} filtered`}
-                  {result.cost_usd !== undefined && ` · $${result.cost_usd.toFixed(5)} charged`}
-                  {result.reserved_usd !== undefined && ` · $${result.reserved_usd.toFixed(2)} reserved`}
-                  {result.reason && ` · ${result.reason.replaceAll('_', ' ')}`}
-                </dd></div>)}</dl>}
+              {detail.parameters?.source_results && (
+                <dl>
+                  {Object.entries(detail.parameters.source_results).map(([site, result]) => (
+                    <div key={site}>
+                      <dt>{site}</dt>
+                      <dd>
+                        {result.status} · {result.fetched} retrieved
+                        {result.filtered !== undefined && ` · ${result.filtered} filtered`}
+                        {result.cost_usd !== undefined &&
+                          ` · $${result.cost_usd.toFixed(5)} charged`}
+                        {result.reserved_usd !== undefined &&
+                          ` · $${result.reserved_usd.toFixed(2)} reserved`}
+                        {result.reason && ` · ${result.reason.replaceAll('_', ' ')}`}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
               {detail.error && <p className="portal-alert">{detail.error}</p>}
             </>
           ) : (

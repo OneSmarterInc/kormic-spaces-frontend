@@ -1,4 +1,14 @@
 import {
+  ChatHistory,
+  ChatHistoryStyles,
+  useChatHistory,
+  type ChatMessage,
+} from './ChatHistory.web';
+import { CollapsibleSidebar } from './CollapsibleSidebar.web';
+import { AssistantText } from './AssistantText.web';
+import { TeamSettings } from './TeamSettings.web';
+import { confirmAction, confirmSignOut } from './confirmSignOut';
+import {
   useCallback,
   useEffect,
   useId,
@@ -12,6 +22,8 @@ import { portalUrl, spacesPagePath, spacesPageSegment } from './deployment';
 import { appConfig } from '../services/config';
 import {
   SpacesClient,
+  SpacesHttpError,
+  canAccessWorkspace,
   type Conversation,
   type LiveCandidate,
   type LiveJob,
@@ -19,6 +31,8 @@ import {
   type SharedView,
   type WorkspaceData,
 } from './liveApi';
+import { usePagedInbox, type ThreadPage, type MessagePage } from './usePagedInbox';
+import { AccountAccess } from './AccountAccess.web';
 import { ActivityLog } from './ActivityLog.web';
 import { useDebouncedSearch } from './useDebouncedSearch';
 import { isThemeId, themes, type ThemeId } from './themes';
@@ -29,7 +43,7 @@ const pageDescriptions: Record<string, string> = {
   Jobs: 'Define the role. Set clear requirements. Find the right match.',
   Messages: 'Keep candidate conversations connected to the role.',
   'Hiring copilot': 'Explore candidate evidence with Sage, your hiring assistant.',
-  'Activity log': 'A complete, read-only history of changes across your workspace.',
+  'Activity log': 'A read-only log of recorded hiring and workspace changes.',
   Settings: 'Manage your team and make this workspace your own.',
 };
 const navPaths: Record<string, string> = {
@@ -107,11 +121,13 @@ function pageFromUrl() {
 }
 function Button({
   children,
+  label,
   onClick,
   primary = false,
   disabled = false,
 }: {
   children: ReactNode;
+  label?: string;
   onClick?: () => void;
   primary?: boolean;
   disabled?: boolean;
@@ -119,6 +135,8 @@ function Button({
   return (
     <button
       type="button"
+      aria-label={label}
+      data-tooltip={label}
       className={`btn ${primary ? 'primary' : ''}`}
       disabled={disabled}
       onClick={onClick}
@@ -206,11 +224,15 @@ function Search({
 function JobSelector({
   jobs,
   selected,
+  allowAll = false,
+  allSelected = false,
   disabled,
   onSelect,
 }: {
   jobs: LiveJob[];
   selected?: LiveJob;
+  allowAll?: boolean;
+  allSelected?: boolean;
   disabled: boolean;
   onSelect: (id: string) => void;
 }) {
@@ -220,7 +242,10 @@ function JobSelector({
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const listId = useId();
-  const options = jobs.filter((job) =>
+  const options = [
+    ...(allowAll ? [{ id: 'all', title: 'All jobs', status: 'All workspace candidates' }] : []),
+    ...jobs,
+  ].filter((job) =>
     `${job.title} ${job.status}`.toLowerCase().includes(query.trim().toLowerCase()),
   );
   const activeIndex = Math.min(active, Math.max(0, options.length - 1));
@@ -245,7 +270,7 @@ function JobSelector({
         className="job-selector-trigger"
         type="button"
         disabled={disabled}
-        aria-label={`Job context: ${selected?.title ?? 'No jobs yet'}`}
+        aria-label={`Job context: ${selected?.title ?? (allSelected ? 'All jobs' : 'No jobs yet')}`}
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-controls={open ? listId : undefined}
@@ -262,7 +287,7 @@ function JobSelector({
         }}
       >
         <span>
-          {selected?.title ?? 'No jobs yet'}
+          {selected?.title ?? (allSelected ? 'All jobs' : 'No jobs yet')}
           {selected && <small>{selected.status}</small>}
         </span>
         <span aria-hidden="true">⌄</span>
@@ -315,7 +340,7 @@ function JobSelector({
                 key={job.id}
                 id={`${listId}-${index}`}
                 role="option"
-                aria-selected={job.id === selected?.id}
+                aria-selected={job.id === (allSelected ? 'all' : selected?.id)}
                 className={index === activeIndex ? 'is-active' : ''}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => choose(job.id)}
@@ -324,7 +349,9 @@ function JobSelector({
                   {job.title}
                   <small>{job.status}</small>
                 </span>
-                {job.id === selected?.id && <span aria-hidden="true">✓</span>}
+                {job.id === (allSelected ? 'all' : selected?.id) && (
+                  <span aria-hidden="true">✓</span>
+                )}
               </li>
             ))}
           </ul>
@@ -338,6 +365,19 @@ function JobSelector({
 export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const api = useMemo(() => new SpacesClient(appConfig().apiHost), []);
   const [session, setSession] = useState<SessionData>();
+  const [sessionRevision, setSessionRevision] = useState(0);
+  const [access, setAccess] = useState(() => {
+    if (typeof window === 'undefined') return { mode: '', token: '' };
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    return {
+      mode: params.get('access') || '',
+      token: params.get('token') || '',
+    };
+  });
+  useEffect(() => {
+    if (access.token)
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [access.token]);
   const [data, setData] = useState<WorkspaceData>();
   const [page, setPage] = useState(pageFromUrl);
   const [jobId, setJobId] = useState(new URLSearchParams(location.search).get('job') ?? '');
@@ -356,21 +396,33 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   }>();
   const [candidateLoading, setCandidateLoading] = useState(false);
   const [candidateError, setCandidateError] = useState('');
+  const [candidateRetry, setCandidateRetry] = useState(0);
   const [error, setError] = useState('');
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [sessionError, setSessionError] = useState('');
+  const [receiptError, setReceiptError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<LiveJob>();
   const [profileId, setProfileId] = useState('');
-  const [threads, setThreads] = useState<Conversation[]>([]);
-  const [threadId, setThreadId] = useState('');
+  const [reviewConflict, setReviewConflict] = useState<{
+    path: string;
+    body: Record<string, unknown>;
+    current: { revision: number; stage: string; note: string };
+  }>();
   const [contactId, setContactId] = useState('');
   const [copilotPrompt, setCopilotPrompt] = useState('');
-  const [answers, setAnswers] = useState<{ question: string; answer: string }[]>([]);
+  const [answers, setAnswers] = useState<ChatMessage[]>([]);
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const copilotPending = useRef(false);
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    if (conversation) conversation.scrollTop = conversation.scrollHeight;
+  }, [answers]);
   const [contextOpen, setContextOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
-  const [teamOpen, setTeamOpen] = useState(false);
-  const [theme, setTheme] = useState<ThemeId>(() => {
+  const [theme] = useState<ThemeId>(() => {
     try {
       const saved = localStorage.getItem('spaces-company-theme');
       return isThemeId(saved) ? saved : 'portal';
@@ -378,27 +430,80 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       return 'portal';
     }
   });
-  const org = session?.organizations[0]?.id;
+  const requestedWorkspace =
+    typeof window === 'undefined'
+      ? ''
+      : new URLSearchParams(window.location.search).get('workspace');
+  const membership =
+    session?.organizations.find((item) => item.id === requestedWorkspace) ??
+    session?.organizations[0];
+  const canAccess = canAccessWorkspace(session, membership?.id);
+  const org = canAccess ? membership?.id : undefined;
+  const inboxTransport = useMemo(
+    () =>
+      org && page === 'Messages'
+        ? {
+            threads: (params: URLSearchParams) =>
+              api.request<ThreadPage<Conversation>>(`${org}/threads/?${params}`),
+            messages: (id: string, params: URLSearchParams) =>
+              api.request<MessagePage>(`${org}/threads/${id}/messages/?${params}`),
+          }
+        : undefined,
+    [api, org, page],
+  );
+  const inbox = usePagedInbox<Conversation>(inboxTransport);
+  const threads = inbox.threads;
+  const threadId = inbox.selected ?? '';
+  const { setSelected, clear: clearInbox, markRead } = inbox;
+  const setThreadId = useCallback((id: string) => setSelected(id || undefined), [setSelected]);
+  const sendAttempt = useRef<
+    { personId: string; jobId: string; text: string; requestId: string } | undefined
+  >(undefined);
+  const readPending = useRef(false);
   useEffect(() => {
-    if (!org || page !== 'Messages') return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    async function refreshMessages() {
-      try {
-        if (!document.hidden) {
-          const value = await api.request<Conversation[]>(`${org}/messages/`, 'GET', undefined, controller.signal);
-          if (!controller.signal.aborted) setThreads(value);
-        }
-      } catch (error) {
-        if (!controller.signal.aborted) setError(errorText(error));
-      } finally {
-        if (!controller.signal.aborted) timer = setTimeout(() => void refreshMessages(), 5000);
+    if (contactId) {
+      const found = threads.find(
+        (thread) => thread.personId === contactId && thread.jobId === jobId,
+      );
+      if (found) {
+        setSelected(found.id);
+        setContactId('');
       }
     }
-    void refreshMessages();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, org, page]);
-  const job = data?.jobs.find((j) => j.id === jobId) ?? data?.jobs[0];
+  }, [contactId, threads, jobId, setSelected]);
+  useEffect(() => {
+    const thread = threads.find((value) => value.id === threadId);
+    const ids =
+      thread?.messages
+        .filter((message) => message.unread)
+        .map((message) => message.id)
+        .slice(0, 100) ?? [];
+    if (!org || !thread || !ids.length || readPending.current) return;
+    readPending.current = true;
+    let active = true;
+    void api
+      .request(`${org}/threads/${thread.id}/messages/`, 'POST', {
+        messageIds: ids,
+      })
+      .then(() => {
+        if (active) {
+          markRead(ids);
+          setReceiptError('');
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) setReceiptError(errorText(error));
+      })
+      .finally(() => {
+        readPending.current = false;
+      });
+    return () => {
+      active = false;
+    };
+  }, [api, org, threadId, threads, markRead]);
+  const job =
+    jobId === 'all' ? undefined : (data?.jobs.find((j) => j.id === jobId) ?? data?.jobs[0]);
+  const copilotReady = !!data?.copilotConfigured && !loading;
   const candidateScope = JSON.stringify([org, jobId, candidateQuery, stageFilter]);
   const candidateKey = JSON.stringify([candidateScope, sort, pageSize]);
   const pageIndex = candidatePage.key === candidateKey ? candidatePage.index : 0;
@@ -421,15 +526,16 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       setLoading(true);
       try {
         const params = new URLSearchParams();
-        if (selected) params.set('job', selected);
+        if (selected && selected !== 'all') params.set('job', selected);
         if (['Candidates', 'Activity log'].includes(page))
           params.set('include_candidates', 'false');
         const next = await api.request<WorkspaceData>(`${org}/workspace/?${params}`);
         if (version !== requestVersion.current) return;
         setData(next);
-        setJobId(next.selectedJob ?? '');
-        const conversations = await api.request<Conversation[]>(`${org}/messages/`);
-        if (version === requestVersion.current) setThreads(conversations);
+        setJobId(selected === 'all' && page === 'Candidates' ? 'all' : (next.selectedJob ?? ''));
+        setWorkspaceError('');
+      } catch (failure) {
+        if (version === requestVersion.current) setWorkspaceError(errorText(failure));
       } finally {
         if (version === requestVersion.current) setLoading(false);
       }
@@ -439,18 +545,22 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   useEffect(() => {
     if (page !== 'Candidates' || !org || !data) return;
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setCandidateLoading(true);
     setCandidateError('');
     const controller = new AbortController();
     {
       const params = new URLSearchParams({
         q: candidateQuery,
-        stage: stageFilter,
-        sort,
+        stage: jobId === 'all' ? '' : stageFilter,
+        sort:
+          jobId === 'all' && ['fit', 'stage', 'assessment'].includes(sort.replace('-', ''))
+            ? 'name'
+            : sort,
         limit: String(pageSize),
         offset: String(pageIndex * pageSize),
       });
-      if (jobId) params.set('job', jobId);
+      if (jobId && jobId !== 'all') params.set('job', jobId);
       void api
         .request<{ count: number; results: LiveCandidate[] }>(
           `${org}/candidates/?${params}`,
@@ -462,10 +572,21 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           if (cancelled) return;
           const lastPage = Math.max(0, Math.ceil(response.count / pageSize) - 1);
           if (pageIndex > lastPage) setCandidatePage({ key: candidateKey, index: lastPage });
-          else setCandidateResult({ ...response, key: resultKey, scope: candidateScope });
+          else
+            setCandidateResult({
+              ...response,
+              key: resultKey,
+              scope: candidateScope,
+            });
         })
         .catch((error: unknown) => {
-          if (!cancelled) setCandidateError(errorText(error));
+          if (!cancelled) {
+            setCandidateError(errorText(error));
+            if (error instanceof SpacesHttpError && error.status === 503) {
+              setCandidateResult(undefined);
+              retryTimer = setTimeout(() => setCandidateRetry((value) => value + 1), 2000);
+            }
+          }
         })
         .finally(() => {
           if (!cancelled) setCandidateLoading(false);
@@ -473,6 +594,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     }
     return () => {
       cancelled = true;
+      clearTimeout(retryTimer);
       controller.abort();
     };
   }, [
@@ -482,6 +604,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     data,
     jobId,
     candidateQuery,
+    candidateRetry,
     candidateScope,
     stageFilter,
     sort,
@@ -492,28 +615,67 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   ]);
   useEffect(() => {
     let active = true;
-    void api
-      .request<SessionData>('session/')
-      .then((s) => {
-        if (active) setSession(s);
-      })
-      .catch((e: unknown) => {
-        if (active) setError(errorText(e));
-      });
+    let checking = false;
+    api.onSessionChange = (next) => {
+      if (!active) return;
+      requestVersion.current++;
+      setData(undefined);
+      clearInbox();
+      setAnswers([]);
+      setCandidateResult(undefined);
+      setCandidateError('');
+      setJobId('');
+      setProfileId('');
+      setThreadId('');
+      setContactId('');
+      setEditing(undefined);
+      setContextOpen(false);
+      setShareOpen(false);
+      setReviewConflict(undefined);
+      setError('');
+      setWorkspaceError('');
+      setSessionError('');
+      setReceiptError('');
+      setSession(next);
+      setSessionRevision((revision) => revision + 1);
+    };
+    const refreshSession = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const next = await api.request<SessionData>('session/');
+        if (active) {
+          setSession(next);
+          setSessionError('');
+        }
+      } catch (error) {
+        if (active) setSessionError(errorText(error));
+      } finally {
+        checking = false;
+      }
+    };
+    const onFocus = () => {
+      if (!document.hidden) void refreshSession();
+    };
+    void refreshSession();
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    const timer = setInterval(onFocus, 30000);
     return () => {
       active = false;
+      api.onSessionChange = undefined;
+      clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
     };
-  }, [api]);
+  }, [api, clearInbox, setThreadId]);
   useEffect(() => {
-    if (org)
-      void reload(new URLSearchParams(location.search).get('job') ?? '').catch((e: unknown) =>
-        setError(errorText(e)),
-      );
+    if (org) void reload(new URLSearchParams(location.search).get('job') ?? '');
     const versionRef = requestVersion;
     return () => {
       versionRef.current++;
     };
-  }, [org, reload]);
+  }, [org, reload, session?.userId, sessionRevision]);
   useEffect(() => {
     const palette = themes.find((t) => t.id === theme)!;
     host.dataset.theme = theme;
@@ -531,11 +693,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     const back = () => {
       setPage(pageFromUrl());
       const id = new URLSearchParams(location.search).get('job') ?? '';
-      if (org) void reload(id).catch((e: unknown) => setError(errorText(e)));
+      if (org) void reload(id);
     };
     window.addEventListener('popstate', back);
     return () => window.removeEventListener('popstate', back);
-  }, [org, reload]);
+  }, [org, reload, session?.userId, sessionRevision]);
   const navigate = (next: string) => {
     setPage(next);
     setQuery('');
@@ -565,16 +727,65 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     }
   };
   const mutate = async (path: string, method: string, body: unknown, success: string) => {
-    await api.request(`${org}/${path}`, method, body);
+    try {
+      await api.request(`${org}/${path}`, method, body);
+    } catch (failure) {
+      if (
+        failure instanceof SpacesHttpError &&
+        failure.status === 409 &&
+        failure.details?.current
+      ) {
+        const current = failure.details.current as {
+          revision: number;
+          stage: string;
+          note: string;
+        };
+        setReviewConflict({
+          path,
+          body: body as Record<string, unknown>,
+          current,
+        });
+      }
+      throw failure;
+    }
     await reload(jobId);
     setNotice(success);
   };
+  const [chatPanel, setChatPanel] = useState<'context' | 'history'>('context');
+  const chatHistory = useChatHistory({
+    api,
+    path: `${org}/copilot/history/`,
+    scope: `${session?.userId}:${org}`,
+    setMessages: setAnswers,
+    waiting: answers.some((item) => item.status === 'pending') && !copilotPending.current,
+    onOpen: (chat) => {
+      setCopilotPrompt('');
+      if (chat.jobId !== jobId) void reload(chat.jobId || 'all');
+    },
+  });
+  const chatBusy = busy || chatHistory.loading || answers.some((item) => item.status === 'pending');
+  const newChat = () => {
+    if (chatBusy || copilotPending.current) return;
+    chatHistory.reset();
+    setCopilotPrompt('');
+  };
   const selectJob = (id: string) => {
+    if (
+      copilotPending.current ||
+      chatHistory.loading ||
+      answers.some((item) => item.status === 'pending')
+    )
+      return;
+    chatHistory.reset();
+    if (id === 'all') {
+      setSort('name');
+      setStageFilter('');
+    }
     setAnswers([]);
     setProfileId('');
     setLimits({});
     history.replaceState(null, '', `${spacesPagePath(paths[pages.indexOf(page)] ?? '')}?job=${id}`);
-    void run(() => reload(id));
+    void reload(id);
   };
   const rows = useMemo(() => {
     if (page === 'Candidates') return displayedCandidates?.results ?? [];
@@ -609,12 +820,16 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       return (sort.startsWith('-') ? -order : order) || a.id.localeCompare(b.id);
     });
   }, [data, query, stageFilter, sort, page, displayedCandidates]);
-  const review = (candidate: LiveCandidate, stage: string, note = candidate.note) =>
+  const review = (candidate: LiveCandidate, stage: string | undefined, note?: string) =>
     run(() =>
       mutate(
         `jobs/${job!.id}/candidates/${candidate.id}/`,
         'POST',
-        { stage, note },
+        {
+          ...(stage === undefined ? {} : { stage }),
+          ...(note === undefined ? {} : { note }),
+          revision: candidate.reviewRevision ?? 0,
+        },
         'Review saved.',
       ),
     );
@@ -642,6 +857,8 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     <JobSelector
       jobs={data?.jobs ?? []}
       selected={job}
+      allowAll={page === 'Candidates'}
+      allSelected={jobId === 'all'}
       disabled={busy || loading || !data?.jobs.length}
       onSelect={selectJob}
     />
@@ -682,6 +899,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               >
                 <button
                   className="live-sort"
+                  disabled={jobId === 'all' && ['fit', 'stage', 'assessment'].includes(field ?? '')}
                   onClick={() => setSort((current) => (current === field ? `-${field}` : field!))}
                 >
                   {label}{' '}
@@ -735,6 +953,9 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       )}
     </div>
   );
+  const canManage = (permission: string) =>
+    data?.organization.role === 'Owner' ||
+    Boolean(data?.organization.permissions?.includes(permission));
   const jobCard = (j: LiveJob) => (
     <article className="opportunity-card" key={j.id}>
       <div className="row between">
@@ -762,15 +983,184 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           >
             Matches
           </Button>
-          <Button onClick={() => setEditing(j)}>Edit</Button>
+          {canManage('jobs_edit') && <Button onClick={() => setEditing(j)}>Edit</Button>}
+          {page === 'Jobs' && canManage('jobs_delete') && (
+            <Button
+              disabled={busy}
+              onClick={async () => {
+                if (
+                  !(await confirmAction(
+                    `Delete ${j.title}? Applications, messages and activity history will be retained.`,
+                    'Delete job',
+                  ))
+                )
+                  return;
+                void run(async () => {
+                  await api.request(`${org}/jobs/${j.id}/`, 'DELETE', { revision: j.revision });
+                  await reload('');
+                  setNotice('Job deleted. Historical records are retained.');
+                });
+              }}
+            >
+              Delete
+            </Button>
+          )}
         </div>
       </div>
-      <p className="tiny muted">
-        Status: {j.status} · Revision {j.revision}
-      </p>
+      {page !== 'Overview' && (
+        <p className="tiny muted">
+          Status: {j.status} · Revision {j.revision}
+        </p>
+      )}
     </article>
   );
-  if (!session?.authenticated)
+  if (access.mode && session)
+    return (
+      <AccountAccess
+        api={api}
+        mode={access.mode}
+        token={access.token}
+        authenticated={session.authenticated}
+        signedIn={setSession}
+        done={() => setAccess({ mode: '', token: '' })}
+      />
+    );
+  if (session?.authenticated && membership && !canAccess)
+    return (
+      <div className="verification-page">
+        <section className="verification-intro">
+          <h2>kormic spaces</h2>
+          <h1>Verify your workspace</h1>
+          <p>
+            We verify email access and review company identity separately to protect candidates.
+          </p>
+        </section>
+        <section className="login-form-side">
+          <div className="login-form">
+            <h2>{membership.name}</h2>
+            <h3>1. Verify your work email</h3>
+            <p>
+              {session.emailVerified
+                ? 'Work email verified.'
+                : 'Verify your work email to continue.'}
+            </p>
+            {!session.emailVerified && (
+              <>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await api.request('verification/', 'POST', {
+                        action: 'send',
+                      });
+                      setNotice('Check your work email. The code expires in 10 minutes.');
+                    })
+                  }
+                >
+                  Send verification code
+                </Button>
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const code = new FormData(event.currentTarget).get('code');
+                    void run(async () => {
+                      await api.request('verification/', 'POST', {
+                        action: 'verify',
+                        code,
+                      });
+                      setSession(await api.request<SessionData>('session/'));
+                      setNotice('Your work email is verified.');
+                    });
+                  }}
+                >
+                  <label className="field">
+                    Verification code
+                    <input
+                      name="code"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      required
+                    />
+                  </label>
+                  <button className="btn primary" disabled={busy} type="submit">
+                    Verify email
+                  </button>
+                </form>
+              </>
+            )}
+            <h3>2. Company review</h3>
+            <p>
+              {membership.verificationStatus === 'rejected'
+                ? 'Your company review was not approved. Contact your Kormic administrator for the next steps.'
+                : membership.verificationStatus === 'approved'
+                  ? 'Company review approved. Each team member must verify their own email.'
+                  : 'Company review pending. Your Kormic administrator must review the company before candidate access is enabled.'}
+            </p>
+            <p>Email verification alone does not verify a company’s identity.</p>
+            {notice && <p role="status">{notice}</p>}
+            {error && <p role="alert">{error}</p>}
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  setSession(await api.request<SessionData>('session/'));
+                })
+              }
+            >
+              Check verification status
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  if (!(await confirmSignOut())) return;
+                  setSession(
+                    await api.request<SessionData>('session/', 'POST', {
+                      action: 'logout',
+                    }),
+                  );
+                })
+              }
+            >
+              Sign out
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  if (session?.authenticated && !membership)
+    return (
+      <div className="login">
+        <section className="login-entry">
+          <div className="login-form">
+            <h1>Workspace access unavailable</h1>
+            <p>
+              Your account has no workspace membership. Contact a workspace owner if you need
+              access.
+            </p>
+            {error && <p role="alert">{error}</p>}
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  if (!(await confirmSignOut())) return;
+                  setSession(
+                    await api.request<SessionData>('session/', 'POST', {
+                      action: 'logout',
+                    }),
+                  );
+                })
+              }
+            >
+              Sign out
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  if (!session?.authenticated || !org)
     return (
       <div className="login">
         <section className="login-story">
@@ -793,8 +1183,9 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
         <section className="login-form-side">
           <AuthForm
             busy={busy}
-            error={error}
+            error={error || sessionError}
             ready={!!session}
+            recover={() => setAccess({ mode: 'request_reset', token: '' })}
             submit={(body) =>
               run(async () => {
                 setSession(await api.request<SessionData>('session/', 'POST', body));
@@ -809,7 +1200,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       <a className="skip" href="#spaces-main">
         Skip to content
       </a>
-      <aside className="workspace-sidebar">
+      <CollapsibleSidebar className="workspace-sidebar">
         <button
           className="home-brand"
           onClick={() => navigate('Overview')}
@@ -823,15 +1214,6 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             <small>SPACES</small>
           </span>
         </button>
-        <div className="workspace-identity">
-          <span className="workspace-avatar" aria-hidden="true">
-            {(data?.organization.name ?? session.organizations[0]?.name ?? 'W').slice(0, 1)}
-          </span>
-          <div>
-            <strong>{data?.organization.name ?? session.organizations[0]?.name}</strong>
-            <small>Hiring workspace</small>
-          </div>
-        </div>
         <p className="nav-label">WORKSPACE</p>
         <nav className="workspace-nav" aria-label="Workspace navigation">
           {pages.map((p) => (
@@ -846,53 +1228,83 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             </button>
           ))}
         </nav>
-        <div className="sidebar-bottom">
-          <p>
-            Consider the evidence.
-            <br />
-            Make the next move.
-          </p>
+        <div className="sidebar-bottom company-account-footer">
+          <div className="company-footer-identity">
+            <span className="workspace-avatar" aria-hidden="true">
+              {(
+                data?.members.find((m) => m.userId === session.userId)?.display_name ||
+                session.organizations.find((m) => m.id === org)?.displayName ||
+                'U'
+              ).slice(0, 1)}
+            </span>
+            <div>
+              <strong>
+                {data?.members.find((m) => m.userId === session.userId)?.display_name ||
+                  session.organizations.find((m) => m.id === org)?.displayName}
+              </strong>
+              <small>
+                {data?.organization.name || session.organizations.find((m) => m.id === org)?.name}
+              </small>
+            </div>
+          </div>
           <Button
+            label="Sign out"
             disabled={busy}
             onClick={() =>
               void run(async () => {
+                if (!(await confirmSignOut())) return;
                 setSession(
-                  await api.request<SessionData>('session/', 'POST', { action: 'logout' }),
+                  await api.request<SessionData>('session/', 'POST', {
+                    action: 'logout',
+                  }),
                 );
                 setData(undefined);
-                setThreads([]);
+                clearInbox();
                 setAnswers([]);
               })
             }
           >
-            Sign out
+            <svg
+              aria-hidden="true"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M10 17v3H4V4h6v3M8 12h12m-4-4 4 4-4 4" />
+            </svg>
           </Button>
         </div>
-      </aside>
+      </CollapsibleSidebar>
       <main
         id="spaces-main"
         tabIndex={-1}
         className={`main page-${paths[pages.indexOf(page)] || 'overview'}`}
         aria-busy={busy || loading}
       >
-        <div className="workspace-topbar">
-          <span>
-            Workspace <span aria-hidden="true">/</span> <strong>{page}</strong>
-          </span>
-          <span>
-            {new Date().toLocaleDateString(undefined, {
-              month: 'short',
-              day: 'numeric',
-              year: 'numeric',
-            })}
-          </span>
-        </div>
         {error && (
           <div className="live-alert" role="alert">
-            {error}{' '}
-            <Button disabled={busy} onClick={() => void run(() => reload(jobId))}>
-              Refresh
+            {error} <Button onClick={() => setError('')}>Dismiss</Button>
+          </div>
+        )}
+        {workspaceError && (
+          <div className="live-alert" role="alert">
+            Workspace refresh: {workspaceError}{' '}
+            <Button disabled={loading} onClick={() => void reload(jobId)}>
+              Retry workspace refresh
             </Button>
+          </div>
+        )}
+        {sessionError && (
+          <div className="live-alert" role="alert">
+            Session refresh: {sessionError}
+          </div>
+        )}
+        {receiptError && page === 'Messages' && (
+          <div className="live-alert" role="alert">
+            Message receipts: {receiptError}
           </div>
         )}
         {notice && (
@@ -907,23 +1319,25 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             <div className="page-head">
               <div>
                 <h1>{page === 'Overview' ? 'Hiring overview' : page}</h1>
-                <p>
-                  {page === 'Candidates'
-                    ? `${data.overview.candidates} shared profiles · job fit is based on current evidence`
-                    : page === 'Pipeline'
-                      ? 'Track progress and move candidates through your hiring process.'
-                      : pageDescriptions[page]}
-                </p>
+                {!['Overview', 'Activity log', 'Settings'].includes(page) && (
+                  <p>
+                    {page === 'Candidates'
+                      ? `${data.overview.candidates} shared profiles · job fit is based on current evidence`
+                      : page === 'Pipeline'
+                        ? 'Track progress and move candidates through your hiring process.'
+                        : pageDescriptions[page]}
+                  </p>
+                )}
               </div>
               <div className="page-actions">
                 {['Overview', 'Candidates', 'Pipeline', 'Hiring copilot'].includes(page) &&
                   selector}
-                {!['Activity log', 'Job collection'].includes(page) && (
-                  <Button disabled={loading || busy} onClick={() => void run(() => reload(jobId))}>
+                {!['Activity log', 'Job collection', 'Settings'].includes(page) && (
+                  <Button disabled={loading || busy} onClick={() => void reload(jobId)}>
                     Refresh
                   </Button>
                 )}
-                {['Overview', 'Jobs'].includes(page) && (
+                {['Overview', 'Jobs'].includes(page) && canManage('jobs_create') && (
                   <Button primary onClick={() => setEditing({ ...emptyJob })}>
                     + Create a job
                   </Button>
@@ -940,7 +1354,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 <section className="metrics-strip">
                   {[
                     ['Active jobs', data.overview.liveJobs],
-                    ['Eligible people', data.overview.eligible],
+                    [
+                      'Eligible people',
+                      data.overview.matchesUpdating ? 'Updating…' : data.overview.eligible,
+                    ],
                     ['Shortlisted', data.overview.shortlisted],
                     ['Conversations', data.overview.conversations],
                   ].map(([label, value]) => (
@@ -962,14 +1379,19 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                     <div className="insight-label">
                       JOB SNAPSHOT · {job?.title ?? 'YOUR NEXT OPPORTUNITY'}
                     </div>
-                    <h2>{data.overview.eligible} eligible profiles to explore</h2>
-                    <p>
-                      {data.candidates.filter((c) => c.fit?.eligibility === 'Needs review').length}{' '}
-                      profiles need an evidence check.
-                    </p>
+                    <h2>
+                      {!job
+                        ? 'Start with the role you want to fill'
+                        : data.overview.matchesUpdating
+                          ? 'Updating candidate matches…'
+                          : `${data.overview.eligible} eligible profiles to explore`}
+                    </h2>
                   </div>
-                  <Button primary onClick={() => navigate('Hiring copilot')}>
-                    Explore with Sage
+                  <Button
+                    primary
+                    onClick={() => (job ? navigate('Hiring copilot') : setEditing({ ...emptyJob }))}
+                  >
+                    {job ? 'Explore with Sage' : 'Create your first job'}
                   </Button>
                 </section>
                 <div className="section-heading">
@@ -1041,6 +1463,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   />
                   <select
                     aria-label="Candidate stage"
+                    disabled={jobId === 'all'}
                     value={stageFilter}
                     onChange={(e) => setStageFilter(e.target.value)}
                   >
@@ -1094,7 +1517,12 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   </label>
                   <Button
                     disabled={candidateLoading || pageIndex === 0}
-                    onClick={() => setCandidatePage({ key: candidateKey, index: pageIndex - 1 })}
+                    onClick={() =>
+                      setCandidatePage({
+                        key: candidateKey,
+                        index: pageIndex - 1,
+                      })
+                    }
                   >
                     Previous
                   </Button>
@@ -1108,7 +1536,12 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                       !currentCandidates ||
                       (pageIndex + 1) * pageSize >= currentCandidates.count
                     }
-                    onClick={() => setCandidatePage({ key: candidateKey, index: pageIndex + 1 })}
+                    onClick={() =>
+                      setCandidatePage({
+                        key: candidateKey,
+                        index: pageIndex + 1,
+                      })
+                    }
                   >
                     Next
                   </Button>
@@ -1174,33 +1607,55 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
             {page === 'Messages' && (
               <>
                 <div className="live-toolbar">
-                  <Search label="Search message profiles" value={query} onChange={setQuery} />
+                  <Search label="Search messages" value={inbox.query} onChange={inbox.setQuery} />
                 </div>
                 <div className="live-messages">
                   <aside>
-                    {threads
-                      .filter((t) =>
-                        `${t.name} ${t.jobTitle}`.toLowerCase().includes(query.toLowerCase()),
-                      )
-                      .map((t) => (
-                        <button
-                          key={t.id}
-                          className={`thread ${threadId === t.id ? 'active' : ''}`}
-                          onClick={() => {
-                            setThreadId(t.id);
-                            setContactId('');
-                          }}
-                        >
-                          <strong>{t.name}</strong>
-                          <span>{t.jobTitle}</span>
-                        </button>
-                      ))}
-                    {!threads.length && (
+                    {inbox.error && <p role="alert">{inbox.error}</p>}
+                    {inbox.loading && <p role="status">Loading messages…</p>}
+                    {threads.map((t) => (
+                      <button
+                        key={t.id}
+                        className={`thread ${threadId === t.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setThreadId(t.id);
+                          setContactId('');
+                        }}
+                      >
+                        <strong>
+                          {t.name}
+                          {!!t.unreadCount && ` · ${t.unreadCount} unread`}
+                        </strong>
+                        <span>{t.jobTitle}</span>
+                      </button>
+                    ))}
+                    {!threads.length && !inbox.loading && (
                       <Empty>Open a candidate profile to start a conversation.</Empty>
                     )}
+                    <div className="row">
+                      <Button
+                        disabled={!inbox.offset}
+                        onClick={() => inbox.setOffset(Math.max(0, inbox.offset - 25))}
+                      >
+                        Previous
+                      </Button>
+                      <span>{inbox.count} conversations</span>
+                      <Button
+                        disabled={inbox.next === null}
+                        onClick={() => inbox.setOffset(inbox.next!)}
+                      >
+                        Next
+                      </Button>
+                    </div>
                   </aside>
                   <section>
+                    {inbox.before !== null && (
+                      <Button disabled={inbox.olderBusy} onClick={() => void inbox.older()}>
+                        Load older messages
+                      </Button>
+                    )}
                     <ConversationPanel
+                      key={threadId || contactId}
                       thread={threads.find((t) =>
                         contactId
                           ? t.personId === contactId && t.jobId === job?.id
@@ -1214,17 +1669,26 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                           const thread = threads.find((t) => t.id === threadId);
                           const personId = contactId || thread?.personId;
                           if (!personId || (!job && !thread)) return;
-                          await mutate(
-                            'messages/',
-                            'POST',
-                            {
+                          const targetJob = contactId ? job!.id : thread!.jobId;
+                          if (
+                            !sendAttempt.current ||
+                            sendAttempt.current.personId !== personId ||
+                            sendAttempt.current.jobId !== targetJob ||
+                            sendAttempt.current.text !== text
+                          )
+                            sendAttempt.current = {
                               personId,
-                              jobId: contactId ? job!.id : thread!.jobId,
+                              jobId: targetJob,
                               text,
                               requestId: crypto.randomUUID(),
-                            },
-                            'Message sent.',
-                          );
+                            };
+                          const result = await api.request<{
+                            applicationId: string;
+                          }>(`${org}/messages/`, 'POST', sendAttempt.current);
+                          sendAttempt.current = undefined;
+                          inbox.refresh();
+                          inbox.setSelected(result.applicationId);
+                          setNotice('Message sent.');
                         })
                       }
                     />
@@ -1233,131 +1697,408 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
               </>
             )}
             {page === 'Hiring copilot' && (
-              <section className="live-panel copilot-panel">
-                <div className="row between">
-                  <div>
-                    <h2>Sage, your hiring copilot</h2>
-                    <p className="muted">
-                      Evidence-led answers and message drafts. You make the decisions.
-                    </p>
-                  </div>
-                  <Button disabled={!job} onClick={() => setContextOpen(true)}>
-                    Job context
-                  </Button>
-                </div>
-                {!data.copilotConfigured && (
-                  <p role="status">
-                    Sage is not available yet. Your workspace administrator can enable it.
-                  </p>
-                )}
-                <p className="small muted">
-                  Context includes up to 25 visible candidates who allow AI assistance. Private
-                  candidate conversations and screening details are excluded.
-                </p>
-                <div className="live-answer-list" aria-live="polite">
-                  {!answers.length && (
-                    <div className="copilot-welcome">
-                      <span className="copilot-symbol" aria-hidden="true">
-                        ✦
-                      </span>
-                      <h3>A second perspective on your shortlist</h3>
-                      <p>Compare evidence, identify gaps, or prepare your next conversation.</p>
+              <div className="hiring-chat-layout">
+                <ChatHistoryStyles />
+                <section className="live-panel copilot-panel">
+                  <div className="row between hiring-chat-header">
+                    <div>
+                      <h2>Sage, your hiring copilot</h2>
+                      <p className="muted">
+                        Company-scoped assistance. Review and confirm any proposed changes.
+                      </p>
                     </div>
+                    <div className="chat-header-actions">
+                      <Button onClick={() => setChatPanel('context')}>Job context</Button>
+                      <Button onClick={() => setChatPanel('history')}>Chat history</Button>
+                      <Button disabled={chatBusy} onClick={newChat}>
+                        New chat
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="chat-history-status" aria-live="polite">
+                    {chatHistory.loading ? 'Opening chat…' : chatHistory.active?.title}
+                  </div>
+                  {chatHistory.error && <p role="alert">{chatHistory.error}</p>}
+                  {chatHistory.active?.jobUnavailable && (
+                    <p role="status">This job was deleted. Start a new chat to use another job.</p>
                   )}
-                  {answers.map((a, i) => (
-                    <article key={i}>
-                      <strong>You</strong>
-                      <p>{a.question}</p>
-                      <strong>Sage</strong>
-                      <p style={{ whiteSpace: 'pre-wrap' }}>{a.answer}</p>
-                    </article>
-                  ))}
-                </div>
-                <div className="row wrap">
-                  {[
-                    'Who meets this job’s minimum threshold?',
-                    'Which evidence should I clarify?',
-                    'Draft a thoughtful interview invitation.',
-                  ].map((p) => (
-                    <Button key={p} onClick={() => setCopilotPrompt(p)}>
-                      {p}
-                    </Button>
-                  ))}
-                </div>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void run(async () => {
-                      const prompt = copilotPrompt;
-                      const result = await api.request<{ answer: string }>(
-                        `${org}/copilot/`,
-                        'POST',
-                        { jobId: job!.id, prompt, requestId: crypto.randomUUID() },
-                      );
-                      setAnswers((a) => [...a, { question: prompt, answer: result.answer }]);
-                      setCopilotPrompt('');
-                    });
-                  }}
-                >
-                  <label className="field">
-                    Ask about this job
-                    <textarea
-                      required
-                      maxLength={2000}
-                      value={copilotPrompt}
-                      onChange={(e) => setCopilotPrompt(e.target.value)}
-                      placeholder="Ask about fit, evidence gaps, or your next conversation…"
-                    />
-                  </label>
-                  <button
-                    className="btn primary"
-                    disabled={busy || loading || !job || !data.copilotConfigured}
+                  <div
+                    className="live-answer-list"
+                    ref={conversationRef}
+                    role="log"
+                    aria-label="Conversation with Sage"
+                    aria-live="polite"
                   >
-                    {busy ? 'Sage is thinking…' : 'Ask Sage'}
-                  </button>
-                </form>
-              </section>
-            )}
-            {page === 'Settings' && (
-              <>
-                <section className="live-panel">
-                  <div className="row between">
-                    <h2>Your team</h2>
-                    {data.organization.role === 'Owner' && (
-                      <Button onClick={() => setTeamOpen(true)}>Add team member</Button>
-                    )}
-                  </div>
-                  {data.members.map((m) => (
-                    <div className="evidence-row" key={m.id}>
-                      <strong>{m.display_name}</strong>
-                      <Tag>{m.role}</Tag>
-                    </div>
-                  ))}
-                </section>
-                <section className="live-panel">
-                  <h2>Workspace appearance</h2>
-                  <div className="live-theme-grid">
-                    {themes.map((t) => (
-                      <button
-                        className="live-theme"
-                        key={t.id}
-                        aria-pressed={theme === t.id}
-                        onClick={() => setTheme(t.id)}
+                    {chatHistory.nextOffset !== null && (
+                      <Button
+                        disabled={chatBusy}
+                        onClick={() => void chatHistory.open(chatHistory.active!.id, true)}
                       >
-                        <span style={{ background: t.header }} />
-                        <span style={{ background: t.accent }} />
-                        <span style={{ background: t.wash }} />
-                        <strong>{t.name}</strong>
-                        <small>{t.description}</small>
-                      </button>
+                        Load older messages
+                      </Button>
+                    )}
+                    {!job && !answers.length ? (
+                      <div role="status">
+                        <h3>Create a job to get started</h3>
+                        <p>
+                          Sage needs a role and its requirements before it can help you assess
+                          candidates.
+                        </p>
+                        <Button primary onClick={() => setEditing({ ...emptyJob })}>
+                          Create your first job
+                        </Button>
+                      </div>
+                    ) : !data.copilotConfigured ? (
+                      <p role="status">
+                        Sage is unavailable. Your workspace administrator can enable it. You can
+                        still review candidates and manage this job.
+                      </p>
+                    ) : !data.candidates.some((c) => c.aiConsent) ? (
+                      <div role="status">
+                        <h3>No candidate evidence available for Sage yet</h3>
+                        <p>
+                          Candidate assistance becomes available when profiles shared with your
+                          workspace allow AI assistance. You can still ask about jobs and request
+                          permitted workspace changes.
+                        </p>
+                        <Button onClick={() => navigate('Candidates')}>Review candidates</Button>
+                      </div>
+                    ) : null}
+                    {copilotReady &&
+                      !!job &&
+                      data.candidates.some((c) => c.aiConsent) &&
+                      !answers.length && (
+                        <div className="copilot-welcome">
+                          <span className="copilot-symbol" aria-hidden="true">
+                            ✦
+                          </span>
+                          <h3>A second perspective on your shortlist</h3>
+                          <p>Compare evidence, identify gaps, or prepare your next conversation.</p>
+                        </div>
+                      )}
+                    {answers.map((a) => (
+                      <article key={a.id} className="chat-exchange">
+                        <div className="chat-user-bubble" role="group" aria-label="Your message">
+                          <p>{a.question}</p>
+                        </div>
+                        <div className="chat-agent-reply" role="group" aria-label="Agent response">
+                          {a.status === 'pending' ? (
+                            <p role="status" className="copilot-pending">
+                              Sage is thinking…
+                            </p>
+                          ) : a.status === 'failed' ? (
+                            <div role="alert">
+                              <p>{a.answer}</p>
+                              <button
+                                className="btn"
+                                disabled={busy}
+                                onClick={() => setCopilotPrompt(a.question)}
+                              >
+                                Restore question to retry
+                              </button>
+                            </div>
+                          ) : (
+                            <AssistantText text={a.answer} />
+                          )}
+                          {a.action && (
+                            <section
+                              className="agent-proposal"
+                              aria-label="Proposed company action"
+                            >
+                              <h3>{a.action.type.replaceAll('_', ' ')}</h3>
+                              <p>
+                                <strong>{a.action.target}</strong>
+                              </p>
+                              <dl>
+                                {Object.entries(a.action.data)
+                                  .filter(
+                                    ([key]) => !['revision', 'jobId', 'personId'].includes(key),
+                                  )
+                                  .map(([key, value]) => (
+                                    <div key={key}>
+                                      <dt>{key.replace(/([A-Z])/g, ' $1')}</dt>
+                                      <dd>
+                                        {Array.isArray(value) ? value.join(', ') : String(value)}
+                                      </dd>
+                                    </div>
+                                  ))}
+                              </dl>
+                              {a.action.status === 'pending' ? (
+                                <>
+                                  <p>
+                                    Review every detail. Nothing changes until you confirm. This
+                                    proposal expires in 10 minutes.
+                                  </p>
+                                  <div className="actions">
+                                    {(['confirm', 'cancel'] as const).map((decision) => (
+                                      <button
+                                        key={decision}
+                                        className={decision === 'confirm' ? 'btn primary' : 'btn'}
+                                        disabled={busy}
+                                        onClick={() =>
+                                          void run(async () => {
+                                            const result = await api.request<{ status: string }>(
+                                              `${org}/copilot/actions/${a.action!.id}/`,
+                                              'POST',
+                                              { decision },
+                                            );
+                                            setAnswers((items) =>
+                                              items.map((item) =>
+                                                item.action?.id === a.action!.id
+                                                  ? {
+                                                      ...item,
+                                                      action: {
+                                                        ...item.action,
+                                                        status: result.status,
+                                                      },
+                                                    }
+                                                  : item,
+                                              ),
+                                            );
+                                            if (result.status === 'completed') await reload(jobId);
+                                          })
+                                        }
+                                      >
+                                        {decision === 'confirm' ? 'Confirm action' : 'Cancel'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : (
+                                <p role="status">Action {a.action.status}.</p>
+                              )}
+                            </section>
+                          )}
+                        </div>
+                      </article>
                     ))}
+                    {copilotReady &&
+                      !!job &&
+                      data.candidates.some((c) => c.aiConsent) &&
+                      !answers.length && (
+                        <div className="hiring-chat-suggestions">
+                          {[
+                            'Who meets this job’s minimum threshold?',
+                            'Which evidence should I clarify?',
+                            'Draft a thoughtful interview invitation.',
+                          ].map((p) => (
+                            <Button
+                              key={p}
+                              disabled={!copilotReady || busy}
+                              onClick={() => setCopilotPrompt(p)}
+                            >
+                              {p}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
                   </div>
+                  <form
+                    className="hiring-chat-composer"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (
+                        !copilotReady ||
+                        chatBusy ||
+                        chatHistory.active?.jobUnavailable ||
+                        copilotPending.current ||
+                        !copilotPrompt.trim()
+                      )
+                        return;
+                      const id = crypto.randomUUID();
+                      const prompt = copilotPrompt.trim();
+                      copilotPending.current = true;
+                      void run(async () => {
+                        setAnswers((items) => [
+                          ...items,
+                          { id, question: prompt, answer: '', status: 'pending' },
+                        ]);
+                        setCopilotPrompt('');
+                        try {
+                          const result = await api.request<{
+                            answer: string;
+                            action?: (typeof answers)[number]['action'];
+                            conversationId?: string;
+                          }>(`${org}/copilot/`, 'POST', {
+                            jobId: job?.id,
+                            prompt,
+                            requestId: id,
+                            conversationId: chatHistory.active?.id,
+                          });
+                          if (!chatHistory.isCurrent()) return;
+                          chatHistory.recorded(result.conversationId, prompt, job?.id || null);
+                          setAnswers((items) =>
+                            items.map((item) =>
+                              item.id === id
+                                ? {
+                                    ...item,
+                                    answer: result.answer,
+                                    action: result.action,
+                                    status: 'completed',
+                                  }
+                                : item,
+                            ),
+                          );
+                        } catch (failure) {
+                          if (!chatHistory.isCurrent()) return;
+                          chatHistory.failed(failure, prompt, job?.id || null);
+                          setAnswers((items) =>
+                            items.map((item) =>
+                              item.id === id
+                                ? { ...item, answer: errorText(failure), status: 'failed' }
+                                : item,
+                            ),
+                          );
+                        } finally {
+                          copilotPending.current = false;
+                        }
+                      });
+                    }}
+                  >
+                    <label className="field">
+                      Ask about this job
+                      <textarea
+                        rows={2}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                            e.preventDefault();
+                            e.currentTarget.form?.requestSubmit();
+                          }
+                        }}
+                        readOnly={chatBusy}
+                        aria-describedby="copilot-composer-help"
+                        required
+                        maxLength={2000}
+                        value={copilotPrompt}
+                        onChange={(e) => setCopilotPrompt(e.target.value)}
+                        placeholder="Ask about fit, evidence gaps, or your next conversation…"
+                      />
+                    </label>
+                    <button
+                      className="btn primary"
+                      disabled={
+                        chatBusy ||
+                        chatHistory.active?.jobUnavailable ||
+                        !copilotReady ||
+                        !copilotPrompt.trim()
+                      }
+                    >
+                      {chatBusy ? 'Sage is thinking…' : 'Ask Sage'}
+                    </button>
+                    <small id="copilot-composer-help">
+                      {copilotReady
+                        ? 'Enter to send · Shift + Enter for a new line. Review answers before acting.'
+                        : loading
+                          ? 'You can draft a question while job context loads.'
+                          : !job
+                            ? 'You can draft a question. Select or create a job before sending.'
+                            : !data?.copilotConfigured
+                              ? 'You can draft a question. Sending is unavailable while Sage is offline.'
+                              : 'You can draft a question. Sending requires candidate profiles that allow AI assistance.'}
+                    </small>
+                  </form>
                 </section>
-              </>
+                {chatPanel === 'history' ? (
+                  <ChatHistory
+                    api={api}
+                    path={`${org}/copilot/history/`}
+                    activeId={chatHistory.active?.id}
+                    disabled={chatBusy}
+                    version={chatHistory.version}
+                    onOpen={(id) => void chatHistory.open(id)}
+                    onRename={chatHistory.renamed}
+                    onDelete={chatHistory.deleted}
+                  />
+                ) : (
+                  <aside className="hiring-chat-context" aria-label="Selected job context">
+                    <h2>Job context</h2>
+                    <h3>{job?.title ?? 'No job selected'}</h3>
+                    {job && (
+                      <>
+                        <p>
+                          {job.location} · {job.work}
+                        </p>
+                        <dl>
+                          <div>
+                            <dt>Minimum fit</dt>
+                            <dd>{job.threshold}%</dd>
+                          </div>
+                          <div>
+                            <dt>Experience</dt>
+                            <dd>{job.years}+ years</dd>
+                          </div>
+                        </dl>
+                        <h3>Required skills</h3>
+                        <div className="opportunity-skills">
+                          {job.skills.map((skill) => (
+                            <span key={skill}>{skill}</span>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                    <h3>Evidence and privacy</h3>
+                    <p>
+                      Sage uses up to 25 shared profiles that allow AI assistance. Private chats and
+                      screening details are excluded.
+                    </p>
+                    <p>
+                      Answers and drafts support your review. You make hiring decisions and send
+                      messages yourself.
+                    </p>
+                  </aside>
+                )}
+              </div>
+            )}
+            {page === 'Settings' && org && (
+              <TeamSettings
+                api={api}
+                org={org}
+                companyName={data.organization.name}
+                changed={() => reload(jobId)}
+              />
             )}
           </>
         )}
       </main>
+      {reviewConflict && (
+        <Modal title="Review changed" close={() => setReviewConflict(undefined)}>
+          <p>Another reviewer changed this record. Compare before saving your changes.</p>
+          <p>
+            Current stage: <strong>{reviewConflict.current.stage}</strong>
+          </p>
+          <h3>Current note</h3>
+          <p style={{ whiteSpace: 'pre-wrap' }}>{reviewConflict.current.note || 'No note'}</p>
+          {'note' in reviewConflict.body && (
+            <>
+              <h3>Your draft</h3>
+              <p style={{ whiteSpace: 'pre-wrap' }}>
+                {String(reviewConflict.body.note) || 'Empty note'}
+              </p>
+            </>
+          )}
+          {'stage' in reviewConflict.body && <p>Your stage: {String(reviewConflict.body.stage)}</p>}
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await mutate(
+                  reviewConflict.path,
+                  'POST',
+                  {
+                    ...reviewConflict.body,
+                    revision: reviewConflict.current.revision,
+                  },
+                  'Review saved.',
+                );
+                setReviewConflict(undefined);
+              })
+            }
+          >
+            Save my changes against this version
+          </Button>
+          <Button onClick={() => setReviewConflict(undefined)}>Keep editing</Button>
+        </Modal>
+      )}
       {editing && (
         <Modal title={editing.id ? 'Edit job' : 'Create a job'} close={() => setEditing(undefined)}>
           <JobForm
@@ -1381,6 +2122,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       {profile && (
         <Modal title={profile.name} className="candidate-dialog" close={() => setProfileId('')}>
           <CandidateProfile
+            key={`${profile.id}:${job?.id ?? 'directory'}`}
             candidate={profile}
             job={job}
             busy={busy || loading}
@@ -1456,61 +2198,12 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           </form>
         </Modal>
       )}
-      {teamOpen && (
-        <Modal title="Add team member" close={() => setTeamOpen(false)}>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const body = formValues(e.currentTarget);
-              void run(async () => {
-                await mutate(
-                  'team/',
-                  'POST',
-                  body,
-                  'Team member added. Share their credentials securely.',
-                );
-                setTeamOpen(false);
-              });
-            }}
-          >
-            <p>Create a local workspace login. No email invitation is sent.</p>
-            <label className="field">
-              Name
-              <input name="name" defaultValue="Akshay Kumar" required maxLength={160} />
-            </label>
-            <label className="field">
-              Email
-              <input name="email" type="email" required autoComplete="off" />
-            </label>
-            <label className="field">
-              Password
-              <input
-                name="password"
-                type="password"
-                minLength={12}
-                required
-                autoComplete="new-password"
-              />
-            </label>
-            <label className="field">
-              Role
-              <select name="role">
-                <option>Manager</option>
-                <option>Recruiter</option>
-              </select>
-            </label>
-            {error && <p role="alert">{error}</p>}
-            <button disabled={busy} className="btn primary">
-              Create login
-            </button>
-          </form>
-        </Modal>
-      )}
     </div>
   );
 }
 
 function AuthForm({
+  recover,
   busy,
   error,
   ready,
@@ -1520,6 +2213,7 @@ function AuthForm({
   error: string;
   ready: boolean;
   submit: (body: unknown) => Promise<boolean>;
+  recover: () => void;
 }) {
   const [register, setRegister] = useState(false);
   return (
@@ -1531,7 +2225,10 @@ function AuthForm({
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          void submit({ ...formValues(e.currentTarget), action: register ? 'register' : 'login' });
+          void submit({
+            ...formValues(e.currentTarget),
+            action: register ? 'register' : 'login',
+          });
         }}
       >
         {register && (
@@ -1564,6 +2261,7 @@ function AuthForm({
           {busy ? 'Please wait…' : register ? 'Create workspace' : 'Sign in'}
         </button>
       </form>
+      <Button onClick={recover}>Forgot your password?</Button>
       <Button onClick={() => setRegister(!register)}>
         {register ? 'Already have an account? Sign in' : 'Create a company workspace'}
       </Button>
@@ -1738,11 +2436,15 @@ function CandidateProfile({
   candidate: LiveCandidate;
   job?: LiveJob;
   busy: boolean;
-  review: (c: LiveCandidate, stage: string, note?: string) => Promise<boolean>;
+  review: (c: LiveCandidate, stage: string | undefined, note?: string) => Promise<boolean>;
   contact: () => void;
   ask: () => void;
 }) {
   const [note, setNote] = useState(c.note);
+  const [noteRevision, setNoteRevision] = useState(c.reviewRevision ?? 0);
+  useEffect(() => {
+    if (note === c.note) setNoteRevision(c.reviewRevision ?? 0);
+  }, [note, c.note, c.reviewRevision]);
   return (
     <div className="candidate-profile">
       <div className="candidate-intro">
@@ -1890,7 +2592,10 @@ function CandidateProfile({
         />
       </label>
       <div className="candidate-actions">
-        <Button disabled={busy || !job} onClick={() => void review(c, c.stage, note)}>
+        <Button
+          disabled={busy || !job}
+          onClick={() => void review({ ...c, reviewRevision: noteRevision }, undefined, note)}
+        >
           Save note
         </Button>
         <label>
@@ -1898,7 +2603,7 @@ function CandidateProfile({
           <select
             disabled={busy || !job}
             value={c.stage}
-            onChange={(e) => void review(c, e.target.value, note)}
+            onChange={(e) => void review(c, e.target.value)}
           >
             {stages.map((s) => (
               <option key={s}>{s}</option>

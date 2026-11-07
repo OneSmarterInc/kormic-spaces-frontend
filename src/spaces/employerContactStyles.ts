@@ -280,4 +280,34 @@ export const employerContactStyles = `
 .ec-review header{padding-bottom:14px;border-bottom:1px solid #d6e0eb;margin-bottom:12px}
 .ec-review header h2{font-size:18px}
 @media(max-width:640px){.ec-overview{gap:8px 16px;padding:4px 0 14px}.ec-email-off{margin-left:0}.ec-toolbar .ec-search{min-width:0}.ec-toolbar .ec-check{margin-left:0}.ec-discovery-note{gap:8px}.ec-discovery-note details{margin-left:0}.ec-review{width:calc(100% - 20px);max-height:calc(100dvh - 24px)}.employer-contacts caption span{float:none;display:block;margin-top:4px}}
+
+.employer-contacts>.ec-overview{margin:0;flex-shrink:0;padding:12px 16px}
+.employer-contacts>.ec-tabs{margin:0;flex-shrink:0}
+.employer-contacts>.ec-toolbar{margin:0;gap:12px;flex-shrink:0}
+.employer-contacts .ec-data-panel{flex:1;min-height:0;display:flex;flex-direction:column;background:white;border:1px solid #dce3eb;border-radius:7px;overflow:hidden}
+.employer-contacts .ec-data-panel>.ec-table-scroll{flex:1;min-height:0;max-height:none;border:0;border-radius:0;scrollbar-gutter:stable}
+.employer-contacts .ec-data-panel>.ec-pagination{flex-shrink:0;margin:0;padding:10px 14px;border-top:1px solid #dce3eb}
+.employer-contacts .ec-data-panel table{table-layout:fixed;width:100%;min-width:900px}
+.employer-contacts .ec-data-panel th,.employer-contacts .ec-data-panel td{padding:10px 12px;overflow-wrap:anywhere}
+.employer-contacts .ec-data-panel th{position:sticky;top:0;z-index:1;background:#f5f7fa}
+.employer-contacts .ec-data-panel th:last-child{width:90px}
+.employer-contacts>.ec-discovery-note{display:block;margin:0;padding:20px;background:white;border:1px solid #dce3eb;border-radius:7px;overflow:auto;min-height:0}
+.employer-contacts>.ec-discovery-note>span{display:block;margin-bottom:8px}
+.employer-contacts>.ec-discovery-note h2{font-size:14px;margin:20px 0 8px}
+.employer-contacts>.ec-discovery-note p{max-width:78ch;margin-bottom:20px}
+@media(max-width:700px){.employer-contacts .ec-data-panel{height:65dvh;min-height:360px;flex:auto}.employer-contacts>.ec-tabs{flex-wrap:wrap}.employer-contacts .ec-tabs button{padding:10px 8px}.employer-contacts>.ec-toolbar form{width:100%}}
+@media(max-width:700px){.employer-contacts>.ec-toolbar form{flex-wrap:nowrap;align-items:center}.employer-contacts>.ec-toolbar form .ec-search{flex:1;min-width:0}}
+
+/* Compact operational controls with clear, persistent labels. */
+.employer-contacts>.ec-overview{display:flex;justify-content:flex-start;align-items:stretch;gap:10px;padding:0;margin:0}
+.ec-overview>span{display:flex;flex-direction:column;gap:3px;min-width:180px;padding:10px 14px;border:1px solid #d6e0eb;border-radius:8px;background:#fff;font-size:13px;color:#455b72;line-height:1.4}
+.ec-overview strong{font-size:21px;line-height:1.2;color:#253244}
+.employer-contacts>.ec-toolbar{justify-content:flex-start;align-items:flex-end;gap:12px}
+.ec-toolbar>.ec-contact-filter{flex-direction:column;align-items:stretch;padding:0;font-size:12px}
+.ec-toolbar form{align-items:flex-end}.ec-toolbar button{min-height:38px}
+.ec-toolbar .ec-search{min-width:250px}.ec-tabs button{padding-top:10px;padding-bottom:10px}
+@media(max-width:700px){.ec-overview>span{flex:1;min-width:145px}.ec-overview strong{font-size:19px}.ec-toolbar>.ec-contact-filter{flex:1}.ec-toolbar>button{white-space:normal}}
+
+.employer-contacts{gap:8px}.ec-overview>span{padding:8px 12px;min-width:180px;gap:2px}.ec-overview strong{font-size:19px}.employer-contacts>.ec-tabs{margin:0}.ec-toolbar .ec-search{min-width:300px}.ec-toolbar .ec-contact-filter select{min-height:38px}.employer-contacts>.ec-toolbar{gap:10px}.portal-shell main:has(.employer-contacts) .portal-title{margin-bottom:12px}.employer-contacts caption{padding:10px 14px}
+@media(max-width:700px){.ec-toolbar .ec-search{min-width:0}.ec-overview>span{min-width:140px}}
 `;

@@ -44,14 +44,14 @@ export function JobCollection({ api }: { api: SpacesClient; org: string }) {
     }
   }
   return (
-    <>
+    <section className="job-data-workspace" aria-label="Job data workspace">
       <div className="admin-section-actions">
         <nav className="admin-tabs" aria-label="Job data views">
           {(
             [
-              ['catalog', 'Jobs'],
+              ['catalog', 'Collected jobs'],
               ['runs', 'Run history'],
-              ['sources', 'Schedules'],
+              ['sources', 'Search schedules'],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -151,6 +151,6 @@ export function JobCollection({ api }: { api: SpacesClient; org: string }) {
           </form>
         </Dialog>
       )}
-    </>
+    </section>
   );
 }

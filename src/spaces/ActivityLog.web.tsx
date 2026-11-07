@@ -3,6 +3,15 @@ import { SpacesClient, type WorkspaceData } from './liveApi';
 import { useDebouncedSearch } from './useDebouncedSearch';
 
 type ActivityEvent = WorkspaceData['activity'][number];
+function readableChange(value: unknown): string {
+  if (value === null || value === undefined) return 'None';
+  if (Array.isArray(value)) return value.map(readableChange).join(', ') || 'None';
+  if (typeof value === 'object')
+    return Object.entries(value)
+      .map(([key, item]) => `${key.replaceAll('_', ' ')}: ${readableChange(item)}`)
+      .join(' · ');
+  return String(value).replaceAll('_', ' ');
+}
 interface ActivityPage {
   count: number;
   results: ActivityEvent[];
@@ -13,6 +22,20 @@ const eventLabels: Record<string, string> = {
   note_updated: 'Review note updated',
   workspace_updated: 'Workspace updated',
   legacy: 'Earlier activity',
+  candidate_applied: 'Candidate applied',
+  candidate_withdrew: 'Candidate withdrew',
+  candidate_reapplied: 'Candidate reapplied',
+  member_invited: 'Member invited',
+  member_joined: 'Member joined',
+  member_profile_changed: 'Member profile updated',
+  member_role_changed: 'Member role changed',
+  member_revoked: 'Workspace access removed',
+  member_email_requested: 'Email change requested',
+  member_email_changed: 'Email changed',
+  company_updated: 'Company updated',
+  job_deleted: 'Job deleted',
+  job_created: 'Job created',
+  job_updated: 'Job updated',
 };
 const initialFilters = {
   q: '',
@@ -93,11 +116,11 @@ export function ActivityLog({ api, org }: { api: SpacesClient; org: string }) {
     <section className="audit-log" aria-label="Workspace activity log">
       <div className="audit-search-row">
         <label className="audit-search">
-          Search activity
+          Search all columns
           <input
             type="search"
             maxLength={200}
-            placeholder="Search candidate, person, job or change…"
+            placeholder="Search names, jobs, stages, events or dates…"
             value={filters.q}
             onChange={(e) => change('q', e.target.value)}
           />
@@ -105,65 +128,6 @@ export function ActivityLog({ api, org }: { api: SpacesClient; org: string }) {
         <button className="btn" onClick={() => setRevision((v) => v + 1)} disabled={pending}>
           Refresh log
         </button>
-      </div>
-      <div className="audit-filters">
-        <label>
-          Event type
-          <select value={filters.event_type} onChange={(e) => change('event_type', e.target.value)}>
-            <option value="">All events</option>
-            {(data?.filters.event_type ?? []).map((value) => (
-              <option key={value} value={value}>
-                {eventLabels[value] ?? value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Changed by
-          <select value={filters.actor_name} onChange={(e) => change('actor_name', e.target.value)}>
-            <option value="">Everyone</option>
-            {(data?.filters.actor_name ?? []).map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Job
-          <select value={filters.job_title} onChange={(e) => change('job_title', e.target.value)}>
-            <option value="">All jobs</option>
-            {(data?.filters.job_title ?? []).map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          New stage
-          <select value={filters.new_stage} onChange={(e) => change('new_stage', e.target.value)}>
-            <option value="">All stages</option>
-            {['New', 'In review', 'Shortlisted', 'Interview', 'Accepted', 'Rejected'].map(
-              (value) => (
-                <option key={value}>{value}</option>
-              ),
-            )}
-          </select>
-        </label>
-        <label>
-          From date
-          <input
-            type="date"
-            value={filters.from}
-            onChange={(e) => change('from', e.target.value)}
-          />
-        </label>
-        <label>
-          To date
-          <input
-            type="date"
-            value={filters.to}
-            min={filters.from || undefined}
-            onChange={(e) => change('to', e.target.value)}
-          />
-        </label>
       </div>
       <div className="audit-status">
         <span role="status">
@@ -178,7 +142,7 @@ export function ActivityLog({ api, org }: { api: SpacesClient; org: string }) {
               setPage(0);
             }}
           >
-            Clear filters
+            Clear search
           </button>
         )}
       </div>
@@ -285,6 +249,19 @@ export function ActivityLog({ api, org }: { api: SpacesClient; org: string }) {
                     ) : (
                       <p className="audit-description">{event.text}</p>
                     )}
+                    {event.changes && Object.keys(event.changes).length > 0 && (
+                      <details className="audit-change-details">
+                        <summary>Change details</summary>
+                        <dl>
+                          {Object.entries(event.changes).map(([key, value]) => (
+                            <div key={key}>
+                              <dt>{key.replaceAll('_', ' ')}</dt>
+                              <dd>{readableChange(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </details>
+                    )}
                   </td>
                   <td>{event.actor_name || <span className="muted">Not recorded</span>}</td>
                   <td>
@@ -300,10 +277,10 @@ export function ActivityLog({ api, org }: { api: SpacesClient; org: string }) {
         </table>
         {!pending && !error && !invalidRange && !data?.results.length && (
           <div className="audit-empty">
-            <h2>{activeFilters ? 'No activity matches these filters' : 'No activity yet'}</h2>
+            <h2>{activeFilters ? 'No matching activity' : 'No activity yet'}</h2>
             <p>
               {activeFilters
-                ? 'Try a different search or clear your filters.'
+                ? 'Try a different search or clear your search.'
                 : 'Hiring changes will appear here as your team works.'}
             </p>
           </div>

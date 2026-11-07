@@ -27,4 +27,75 @@ export const portalStyles = `
 .admin-table.catalog-table .table-link{white-space:nowrap}
 .admin-table.catalog-table time span{display:block}
 .admin-table-scroll:focus-visible{outline:2px solid #244f80;outline-offset:-2px}
+
+/* Shared, viewport-bounded data workspaces. Dialogs retain their own scrolling. */
+.portal-shell main:has(.job-data-workspace),.portal-shell main:has(.employer-contacts){height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+.portal-shell main:has(.job-data-workspace)>.collection-pulse{flex-shrink:0;margin-bottom:12px;padding:12px 16px}
+.job-data-workspace,.employer-contacts{display:flex;flex-direction:column;flex:1;min-height:0;gap:12px}
+.job-data-workspace>.admin-data-panel{flex:1;min-height:0;display:flex;flex-direction:column}
+.job-data-workspace .admin-table-scroll{flex:1;min-height:0;max-height:none;overflow:auto;scrollbar-gutter:stable}
+.job-data-workspace .admin-table-footer{flex-shrink:0}
+.job-data-workspace .admin-section-actions{margin:0;flex-shrink:0;border-bottom:1px solid var(--line)}
+.job-data-workspace .admin-tabs{background:transparent;padding:0;gap:4px}
+.job-data-workspace .admin-tabs button{border-radius:0;border-bottom:2px solid transparent;padding:10px 14px;background:transparent;box-shadow:none}
+.job-data-workspace .admin-tabs button[aria-current=page]{border-bottom-color:#244f80;color:#244f80;font-weight:650}
+@media(max-width:700px){.portal-shell main:has(.job-data-workspace),.portal-shell main:has(.employer-contacts){height:auto;min-height:100dvh;overflow:visible}.job-data-workspace>.admin-data-panel{height:65dvh;min-height:360px;flex:auto}.job-data-workspace .admin-section-actions{flex-wrap:wrap;padding-bottom:8px}.job-data-workspace .admin-tabs button{padding:10px 8px}}
+
+.portal-shell main:has(.job-data-workspace) .portal-title{margin-bottom:8px}
+.portal-shell main:has(.job-data-workspace) .portal-top{margin-bottom:10px}
+.job-data-workspace{gap:8px}.job-data-workspace .admin-table-heading{padding:10px 14px 0}
+.admin-toolbar{justify-content:flex-start;gap:12px;align-items:flex-end;padding:10px 14px}
+.admin-toolbar .table-count{margin-left:auto;align-self:center}
+.admin-toolbar form{flex:0 1 470px}.admin-toolbar form input{min-width:0;width:100%}
+.admin-toolbar>label{flex:0 0 auto;max-width:220px}
+.account-directory{display:grid;gap:12px}.account-directory .admin-section-actions{margin:0}
+@media(max-width:700px){.admin-toolbar{flex-wrap:wrap}.admin-toolbar form{flex-basis:100%}.admin-toolbar .table-count{display:none}}
+
+.collection-pulse{justify-content:flex-start;gap:24px;flex-wrap:wrap}
+.collection-pulse dl{display:grid;grid-template-columns:repeat(6,minmax(92px,1fr));gap:0;flex:1;min-width:0;margin:0}
+.collection-pulse dl>div{padding:4px 14px;text-align:center;border-left:1px solid #dde3eb}
+.collection-pulse dt{font-size:12px;line-height:1.4;min-height:34px;display:flex;align-items:center;justify-content:center;margin-bottom:8px}
+.collection-pulse dd{font-size:22px;line-height:1.2;text-align:center}
+@media(max-width:950px){.collection-pulse dl{width:100%;grid-template-columns:repeat(3,minmax(0,1fr));row-gap:18px}.collection-pulse dl>div:nth-child(3n+1){border-left:0}.collection-pulse dt{min-height:32px}}
+
+.portal-shell main:has(.copilot-layout:not([hidden])){height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+.portal-shell main:has(.copilot-layout:not([hidden])) .portal-title{margin-bottom:12px}
+.copilot-layout:not([hidden]){flex:1;min-height:0;height:auto;display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px}
+.copilot-thread{min-height:0;display:flex;flex-direction:column;overflow:hidden;border-radius:10px}
+.copilot-log{flex:1;min-height:0;overflow-y:auto;padding:20px 24px}.copilot-thread-header{flex-shrink:0;padding:14px 20px}
+.copilot-composer{flex-shrink:0;margin-top:auto;padding:12px 16px;background:#fff}.copilot-composer textarea{min-height:44px;max-height:140px;padding:12px;resize:none;border-radius:8px}.copilot-composer>div{margin-top:8px}
+.copilot-welcome{max-width:620px;margin:32px auto}.copilot-welcome h2{font-size:24px}.copilot-prompts{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.copilot-prompts button{flex:1 1 200px;text-align:left;white-space:normal;padding:12px}
+.copilot-context.operations-panel{display:block;min-height:0;overflow-y:auto;background:#fff;border:1px solid #dde3eb;border-radius:10px;padding:16px}
+.operations-panel header{display:flex;flex-direction:column;gap:4px}.operations-panel h2{font-size:16px}.operations-panel header>span,.operations-updated{font-size:12px;color:#526277}.operations-panel section{padding:14px 0;border-top:1px solid #dde3eb}.operations-panel h3{font-size:13px;margin:0 0 10px}.operations-panel small{display:block;font-size:12px;line-height:1.5}.operations-panel dl{display:grid;grid-template-columns:1fr auto;gap:8px;margin:10px 0}.operations-panel dd{margin:0;text-align:right;overflow-wrap:anywhere;max-width:145px}.operations-panel .operations-runs{list-style:none;padding:0;margin:0}.operations-runs li{display:grid;gap:4px;padding:10px 0;border-bottom:1px solid #edf0f4}.operations-runs strong{font-size:13px}.operations-runs span,.operations-runs time{font-size:12px;color:#526277}.operations-online{color:#286747}.operations-panel .operations-footnote{font-size:12px;line-height:1.6}.operations-panel .operations-updated{margin:8px 0 12px}
+@media(max-width:1000px){.copilot-layout:not([hidden]){grid-template-columns:minmax(0,1fr) 250px;gap:10px}}
+@media(max-width:760px){.portal-shell main:has(.copilot-layout:not([hidden])){height:auto;min-height:100dvh;overflow:visible}.copilot-layout:not([hidden]){display:flex;flex-direction:column;min-height:0}.copilot-thread{height:70dvh;min-height:420px;flex:none}.copilot-context.operations-panel{max-height:420px}.copilot-log{padding:14px}.copilot-welcome{margin:12px auto}.copilot-welcome h2{font-size:21px}}
+
+.portal-account{display:grid;grid-template-columns:1fr auto;gap:8px;padding-top:14px}.portal-profile{grid-column:1/-1;display:flex;align-items:center;gap:10px;min-width:0}.portal-profile-avatar{display:grid;place-items:center;width:34px;height:34px;flex-shrink:0;background:#eaf0f6;border-radius:8px;color:#294f7c;font-weight:700}.portal-profile>div{min-width:0;display:grid;gap:2px}.portal-profile strong{font-size:12px}.portal-profile>div>span{font-size:11px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}.portal-profile small{font-size:11px}.portal-account button{margin:0;display:flex;align-items:center;gap:8px;padding:8px;color:#34455b;background:transparent;border:1px solid transparent;border-radius:6px}.portal-account button:hover,.portal-account button[aria-current=page]{background:#eaf0f6}.portal-account .portal-signout{min-width:36px;justify-content:center}.portal-settings-link{justify-content:flex-start}
+.account-settings{max-width:720px;background:#fff;border:1px solid #dde3eb;border-radius:10px;padding:24px}.account-settings h2{font-size:18px;margin:0 0 6px}.account-settings header p{color:#526277;margin-bottom:20px}.account-settings form{display:grid;gap:18px}.account-settings input[readonly]{background:#f4f6f9;color:#526277}.profile-facts{display:flex;flex-wrap:wrap;gap:24px;padding:14px 0;border-block:1px solid #dde3eb;margin:0}.profile-facts dt{font-size:12px;color:#526277}.profile-facts dd{margin:6px 0 0;font-weight:600}.settings-actions{display:flex;gap:10px;flex-wrap:wrap}
+@media(max-width:760px){.portal-account{display:flex;flex-wrap:wrap;gap:8px;padding-top:8px}.portal-profile{flex:1}.portal-profile small{display:block}.portal-account .portal-settings-link{margin-left:auto}.account-settings{padding:18px}.portal-profile>div>span{max-width:200px}}
+
+.admin-table.fixed-account-table{table-layout:fixed;min-width:1050px;width:100%}
+.admin-table.fixed-account-table th,.admin-table.fixed-account-table td{max-width:none;white-space:normal;overflow-wrap:anywhere;vertical-align:top}
+.admin-table.fixed-account-table th button{white-space:nowrap}.admin-table.fixed-account-table .primary-cell{min-width:0;font-weight:500}
+.admin-table.fixed-account-table td:last-child{font-variant-numeric:tabular-nums}.admin-table.fixed-account-table .admin-badge{white-space:nowrap}
+
+.assistant-copy{display:block;line-height:1.7;overflow-wrap:anywhere;min-width:0}
+.assistant-copy p{white-space:normal!important;margin:0 0 12px!important}
+.assistant-copy h1,.assistant-copy h2,.assistant-copy h3,.assistant-copy h4,.assistant-copy h5,.assistant-copy h6{font-size:1.05em;line-height:1.45;margin:20px 0 10px;font-weight:650}
+.assistant-copy ul,.assistant-copy ol{margin:8px 0 16px;padding-left:24px;list-style-position:outside}
+.assistant-copy ul{list-style-type:disc}.assistant-copy ol{list-style-type:decimal}
+.assistant-copy li{margin:6px 0}.assistant-copy li p{margin:0!important}
+.assistant-copy blockquote{border-left:3px solid var(--line);margin:12px 0;padding-left:14px;color:var(--muted)}
+.assistant-copy pre{overflow:auto;max-width:100%;background:var(--wash,#f2f5f9);padding:12px;border-radius:8px;white-space:pre}
+.assistant-copy code{font-size:.9em;background:var(--wash,#f2f5f9);padding:2px 4px;border-radius:3px}.assistant-copy pre code{padding:0;background:none}
+.assistant-copy a{text-decoration:underline}.assistant-table{overflow-x:auto;max-width:100%;margin:12px 0}
+.assistant-table table{border-collapse:collapse;width:100%}.assistant-table th,.assistant-table td{padding:8px 12px;border:1px solid var(--line);text-align:left}
+.assistant-copy>:first-child{margin-top:0}.assistant-copy>:last-child{margin-bottom:0!important}
+
+.chat-exchange,.copilot-exchange{display:flex;flex-direction:column;gap:22px;min-width:0}
+.chat-exchange .chat-user-bubble,.copilot-exchange .chat-user-bubble{align-self:flex-end;margin-left:auto;width:fit-content;max-width:82%;padding:12px 18px;border-radius:18px;background:var(--wash,#eaf0f7);text-align:left;overflow-wrap:anywhere;min-width:0;box-sizing:border-box}
+.chat-user-bubble p{margin:0!important;white-space:pre-wrap;line-height:1.65}
+.chat-exchange .chat-agent-reply,.copilot-exchange .chat-agent-reply{align-self:flex-start;width:100%;max-width:100%;min-width:0;padding:0;background:transparent;text-align:left;line-height:1.7;overflow-wrap:anywhere}
+.chat-agent-reply .copilot-pending{color:var(--muted,#64758b);margin:0;font-size:14px}
+@media(max-width:600px){.chat-exchange .chat-user-bubble,.copilot-exchange .chat-user-bubble{max-width:90%;padding:10px 14px}.chat-exchange,.copilot-exchange{gap:18px}}
 `;

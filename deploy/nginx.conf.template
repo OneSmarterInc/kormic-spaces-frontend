@@ -1,0 +1,98 @@
+# Kormic Spaces behind an AWS Application Load Balancer that holds the HTTPS
+# certificate and forwards to this container on port 80.
+# Build with: --build-arg NGINX_TEMPLATE=nginx.alb.conf.template
+# Backend setting: DJANGO_NUM_PROXIES=2 (load balancer + nginx).
+#
+# Template: the nginx image replaces ${PUBLIC_HOST} (the site's domain) at start-up.
+
+upstream kormic_api {
+    server api:8000;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    # Serve the real entry file; a missing build must fail the health check.
+    location = /healthz {
+        root /usr/share/nginx/html;
+        try_files /index.html =503;
+        add_header Cache-Control "no-store" always;
+        access_log off;
+    }
+
+    # Health checks come straight from the load balancer, without X-Forwarded-Proto.
+    location = /api/health/ {
+        proxy_pass http://kormic_api;
+        proxy_set_header Host ${PUBLIC_HOST};
+    }
+
+    # People who typed http:// are sent to https://; the load balancer says which it was.
+    if ($http_x_forwarded_proto = "http") {
+        return 301 https://$host$request_uri;
+    }
+
+    # Uploads: up to 5 screenshots of 10 MB each (the API checks the exact limits).
+    client_max_body_size 55m;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+    # The app keeps its sign-in tokens in browser storage, so only this site's
+    # own scripts may run. Styles are inline because React Native Web writes them.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+
+    location /api/ {
+        proxy_pass http://kormic_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_read_timeout 150s;
+    }
+
+    location /spaces/ {
+        proxy_pass http://kormic_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+        proxy_read_timeout 150s;
+    }
+
+    location /admin/ {
+        proxy_pass http://kormic_api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;
+    }
+
+    location /static/ {
+        alias /srv/static/;
+        expires 7d;
+    }
+
+    # Bundles have content hashes in their names, so they can be cached for a year.
+    location /assets/ {
+        root /usr/share/nginx/html;
+        expires 1y;
+        add_header Cache-Control "public, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    }
+
+    # Every app address (/welcome, /profile, /navigator/chat ...) is served by index.html.
+    location / {
+        root /usr/share/nginx/html;
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    }
+}

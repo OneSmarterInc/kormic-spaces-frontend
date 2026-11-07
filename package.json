@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12.0" },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite --host localhost --port 8082",
     "build": "tsc --noEmit && vite build",
@@ -11,7 +13,12 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.ts"
   },
-  "dependencies": { "react": "19.1.0", "react-dom": "19.1.0" },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/react": "~19.1.0",

@@ -1,9 +1,13 @@
+import { CollapsibleSidebar } from './CollapsibleSidebar.web';
+import { confirmSignOut } from './confirmSignOut';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { appConfig } from '../services/config';
-import { SpacesClient } from './liveApi';
+import { AdminClient, type AdminSession as Session } from './adminApi';
 import { JobCollection } from './JobCollection.web';
 import { AdminCopilot } from './AdminCopilot.web';
 import { CollectionPulse, RecentRuns, type RunSummary } from './OperationsStatus.web';
+import { AccountSettings } from './AccountSettings.web';
+import { AccountDirectory } from './AccountDirectory.web';
 import { AdminTable } from './AdminTable.web';
 import { DemandMonitor, type AgentState } from './DemandMonitor.web';
 import { OperationsCharts, type TrendPoint } from './OperationsCharts.web';
@@ -11,7 +15,6 @@ import { spacesPagePath, spacesPageSegment } from './deployment';
 import { portalStyles } from './portalStyles';
 import { EmployerContacts } from './EmployerContacts.web';
 
-type Session = { authenticated: boolean; name: string };
 type Summary = AgentState & {
   recent_runs: RunSummary[];
   current_run: RunSummary | null;
@@ -29,6 +32,8 @@ type Summary = AgentState & {
   profile_pair_count: number;
   profile_pairs_omitted: number;
   collection_status: Record<string, number>;
+  degraded_runs_24h: number;
+  source_failures_24h: number;
   chat_status: Record<string, number>;
   model: { primary: string; fallback: string | null };
 };
@@ -40,6 +45,7 @@ const pages = {
   users: 'Users',
   copilot: 'Admin copilot',
   activity: 'Activity log',
+  settings: 'Settings',
 };
 type Page = keyof typeof pages;
 const currentPage = (): Page => {
@@ -50,7 +56,7 @@ const failure = (e: unknown) =>
   e instanceof Error ? e.message : 'The request could not be completed.';
 
 export function PortalConsole() {
-  const api = useMemo(() => new SpacesClient(appConfig().apiHost), []);
+  const api = useMemo(() => new AdminClient(appConfig().apiHost), []);
   const [session, setSession] = useState<Session>();
   const [page, setPage] = useState<Page>(currentPage);
   const [summary, setSummary] = useState<Summary>();
@@ -59,14 +65,38 @@ export function PortalConsole() {
   const [revision, setRevision] = useState(0);
   const [updatedAt, setUpdatedAt] = useState<Date>();
   useEffect(() => {
-    const controller = new AbortController();
-    api
-      .request<Session>('admin/session/', 'GET', undefined, controller.signal)
-      .then(setSession)
-      .catch((e) => {
-        if (!controller.signal.aborted) setError(failure(e));
-      });
-    return () => controller.abort();
+    let active = true;
+    api.onAdminSessionChange = (next) => {
+      if (!active) return;
+      setSummary(undefined);
+      setUpdatedAt(undefined);
+      setError('');
+      setBusy(false);
+      setRevision((value) => value + 1);
+      setSession(next);
+    };
+    const refresh = () => {
+      if (document.hidden) return;
+      void api
+        .request<Session>('admin/session/')
+        .then((next) => {
+          if (active) setSession(next);
+        })
+        .catch((error: unknown) => {
+          if (active) setError(failure(error));
+        });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    const timer = setInterval(refresh, 15000);
+    return () => {
+      active = false;
+      api.onAdminSessionChange = undefined;
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+      clearInterval(timer);
+    };
   }, [api]);
   useEffect(() => {
     const back = () => setPage(currentPage());
@@ -74,7 +104,7 @@ export function PortalConsole() {
     return () => window.removeEventListener('popstate', back);
   }, []);
   useEffect(() => {
-    if (!session?.authenticated) return;
+    if (!session?.authenticated || !['overview', 'planner', 'copilot'].includes(page)) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let inFlight = false;
@@ -99,10 +129,12 @@ export function PortalConsole() {
         if (!controller.signal.aborted) setError(failure(e));
       } finally {
         inFlight = false;
-        if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), 5000);
+        if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), 15000);
       }
     }
-    const resume = () => { if (!document.hidden) void refresh(); };
+    const resume = () => {
+      if (!document.hidden) void refresh();
+    };
     document.addEventListener('visibilitychange', resume);
     window.addEventListener('online', resume);
     void refresh();
@@ -112,7 +144,7 @@ export function PortalConsole() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [api, session?.authenticated, revision]);
+  }, [api, session?.authenticated, session?.userId, revision, page]);
   function navigate(next: Page) {
     setPage(next);
     history.pushState({}, '', spacesPagePath(next === 'overview' ? 'admin' : `admin/${next}`));
@@ -142,7 +174,24 @@ export function PortalConsole() {
     });
   }
   const styles = <style>{portalStyles}</style>;
-  if (!session?.authenticated)
+  if (!session)
+    return (
+      <div className="portal-login">
+        {styles}
+        <section aria-busy={!error}>
+          <h1>Kormic Administration</h1>
+          {error ? (
+            <>
+              <p role="alert">{error}</p>
+              <button onClick={() => window.location.reload()}>Retry connection</button>
+            </>
+          ) : (
+            <p role="status">Checking your session…</p>
+          )}
+        </section>
+      </div>
+    );
+  if (!session.authenticated)
     return (
       <div className="portal-login">
         {styles}
@@ -164,18 +213,18 @@ export function PortalConsole() {
           </form>
           {error && <p role="alert">{error}</p>}
           <small>
-            Restricted to authorized portal administrators. Accounts are provisioned by an operator.
+            Restricted to authorized portal administrators. New administrators join by invitation.
           </small>
         </section>
       </div>
     );
   return (
-    <div className="portal-shell">
+    <div className="portal-shell" key={`${session.userId}:${revision}`}>
       {styles}
       <a className="portal-skip" href="#portal-main">
         Skip to content
       </a>
-      <aside className="portal-sidebar">
+      <CollapsibleSidebar className="portal-sidebar">
         <div className="portal-brand">
           <b>
             kormic<span> / Spaces</span>
@@ -183,95 +232,155 @@ export function PortalConsole() {
           <small>Administration</small>
         </div>
         <nav aria-label="Administration">
-          {Object.entries(pages).map(([key, label]) => (
-            <button
-              key={key}
-              aria-current={page === key ? 'page' : undefined}
-              onClick={() => navigate(key as Page)}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="18"
-                height="18"
-                aria-hidden="true"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+          {Object.entries(pages)
+            .filter(([key]) => key !== 'settings')
+            .map(([key, label]) => (
+              <button
+                key={key}
+                aria-current={page === key ? 'page' : undefined}
+                onClick={() => navigate(key as Page)}
               >
-                <path
-                  d={
-                    {
-                      overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
-                      collection: 'M4 7h16v14H4z M8 7V3h8v4 M4 12h16 M10 12v3h4v-3',
-                      contacts: 'M4 21V3h12v18 M8 7h4 M8 11h4 M8 15h4 M16 9h4v12 M2 21h20',
-                      planner: 'M8 3h8v4H8z M3 17h6v4H3z M15 17h6v4h-6z M12 7v5 M6 17v-5h12v5',
-                      users: 'M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
-                      copilot: 'M4 4h16v12H9l-5 4z M8 8h8 M8 12h5',
-                      activity: 'M5 3h14v18H5z M9 7h6 M9 12h6 M9 17h4',
-                    }[key as Page]
-                  }
-                />
-              </svg>
-              <span>{label}</span>
-            </button>
-          ))}
+                <svg
+                  viewBox="0 0 24 24"
+                  width="18"
+                  height="18"
+                  aria-hidden="true"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path
+                    d={
+                      {
+                        overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
+                        collection: 'M4 7h16v14H4z M8 7V3h8v4 M4 12h16 M10 12v3h4v-3',
+                        contacts: 'M4 21V3h12v18 M8 7h4 M8 11h4 M8 15h4 M16 9h4v12 M2 21h20',
+                        planner: 'M8 3h8v4H8z M3 17h6v4H3z M15 17h6v4h-6z M12 7v5 M6 17v-5h12v5',
+                        users: 'M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
+                        copilot: 'M4 4h16v12H9l-5 4z M8 8h8 M8 12h5',
+                        settings: 'M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8',
+                        activity: 'M5 3h14v18H5z M9 7h6 M9 12h6 M9 17h4',
+                      }[key as Page]
+                    }
+                  />
+                </svg>
+                <span>{label}</span>
+              </button>
+            ))}
         </nav>
         <div className="portal-account">
-          <small>Signed in as</small>
-          <span>{session.name}</span>
+          <div className="portal-profile">
+            <span className="portal-profile-avatar" aria-hidden="true">
+              {session.name.slice(0, 1).toUpperCase()}
+            </span>
+            <div>
+              <strong>Administrator</strong>
+              <span data-tooltip={session.name}>{session.name}</span>
+              <small>OneSmarter Inc.</small>
+            </div>
+          </div>
           <button
+            className="portal-settings-link"
+            aria-current={page === 'settings' ? 'page' : undefined}
+            onClick={() => navigate('settings')}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M19.17,9.81 L21.36,10.35 L21.36,13.65 L19.17,14.19 L18.62,15.52 L19.78,17.45 L17.45,19.78 L15.52,18.62 L14.19,19.17 L13.65,21.36 L10.35,21.36 L9.81,19.17 L8.48,18.62 L6.55,19.78 L4.22,17.45 L5.38,15.52 L4.83,14.19 L2.64,13.65 L2.64,10.35 L4.83,9.81 L5.38,8.48 L4.22,6.55 L6.55,4.22 L8.48,5.38 L9.81,4.83 L10.35,2.64 L13.65,2.64 L14.19,4.83 L15.52,5.38 L17.45,4.22 L19.78,6.55 L18.62,8.48 Z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            Settings
+          </button>
+          <button
+            className="portal-signout"
+            title="Sign out"
+            aria-label="Sign out"
             disabled={busy}
             onClick={() =>
               void run(async () => {
-                setSession(await api.request<Session>('admin/session/', 'POST', { action: 'logout' }));
+                if (!(await confirmSignOut())) return;
+                setSession(
+                  await api.request<Session>('admin/session/', 'POST', {
+                    action: 'logout',
+                  }),
+                );
                 setSummary(undefined);
               })
             }
           >
-            Sign out
+            <svg
+              viewBox="0 0 24 24"
+              width="20"
+              height="20"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M9 4H4v16h5M14 8l4 4-4 4M8 12h12" />
+            </svg>
           </button>
         </div>
-      </aside>
+      </CollapsibleSidebar>
       <main id="portal-main">
         <header className="portal-top">
           <span>
             Kormic Careers <span aria-hidden="true">/</span> Administration
           </span>
           <span className={summary?.worker_healthy ? 'portal-status good' : 'portal-status'}>
-            {summary?.worker_healthy ? 'Collector online' : 'Collector not reporting'}
+            {!summary
+              ? 'Administration'
+              : summary.worker_healthy
+                ? 'Collector online'
+                : 'Collector not reporting'}
           </span>
         </header>
         <div className="portal-title">
           <div>
             <h1>{pages[page]}</h1>
-            <p>
-              {page === 'overview'
-                ? 'Your portal, agents and data at a glance.'
-                : page === 'collection'
-                  ? 'Browse collected jobs, collection history and search schedules.'
+            {!['collection', 'copilot'].includes(page) && (
+              <p>
+                {page === 'overview'
+                  ? 'Your portal, agents and data at a glance.'
                   : page === 'contacts'
                     ? 'Review employer identity, contact purpose and source evidence.'
-                  : page === 'planner'
-                    ? 'Review search decisions and control automatic discovery.'
-                    : page === 'users'
-                      ? 'Monitor registered Careers users and their selected roles.'
-                      : page === 'copilot'
-                        ? 'Ask about portal health, collection activity and recommendation processing.'
-                        : 'A record of administrative actions across the portal.'}
-            </p>
+                    : page === 'planner'
+                      ? 'Review search decisions and control automatic discovery.'
+                      : page === 'users'
+                        ? 'Manage Careers users, company workspaces and administrators.'
+                        : page === 'settings'
+                          ? 'Your administrator profile and security.'
+                          : page === 'copilot'
+                            ? 'Ask about portal health, collection activity and recommendation processing.'
+                            : 'A record of administrative actions across the portal.'}
+              </p>
+            )}
           </div>
-          {page !== 'contacts' && <div className="page-status">
-            <span className={summary?.worker_healthy ? 'portal-status good' : 'portal-status'}>
-              {summary?.worker_healthy ? 'Worker connected' : 'Worker not reporting'}
-            </span>
-            <small>
-              {updatedAt
-                ? `Updated ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
-                : 'Connecting…'}
-            </small>
-          </div>}
+          {page === 'overview' && (
+            <div className="page-status">
+              <span className={summary?.worker_healthy ? 'portal-status good' : 'portal-status'}>
+                {summary?.worker_healthy ? 'Worker connected' : 'Worker not reporting'}
+              </span>
+              <small>
+                {updatedAt
+                  ? `Updated ${updatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+                  : 'Connecting…'}
+              </small>
+            </div>
+          )}
         </div>
         {error && (
           <div className="portal-alert" role="alert">
@@ -298,6 +407,8 @@ export function PortalConsole() {
                 ))}
               </section>
               <CollectionPulse
+                degraded={summary.degraded_runs_24h}
+                sourceFailures={summary.source_failures_24h}
                 runs={summary.current_run ? [summary.current_run] : []}
                 statuses={{
                   ...summary.collection_status,
@@ -330,21 +441,18 @@ export function PortalConsole() {
               </div>
             </>
           ))}
-        {page === 'collection' && summary && (
-          <CollectionPulse
-            runs={summary.current_run ? [summary.current_run] : []}
-            statuses={{
-              ...summary.collection_status,
-              running: summary.queue_status?.running ?? 0,
-              queued: summary.queue_status?.queued ?? 0,
-            }}
-            healthy={summary.worker_healthy}
-                deferredReason={summary.resource_status?.reason}
+        {page === 'collection' && <JobCollection api={api} org="admin" />}
+        {page === 'planner' && (
+          <DemandMonitor
+            api={api}
+            state={summary}
+            stale={Boolean(error)}
+            onChanged={() => setRevision((n) => n + 1)}
+            onViewJobs={() => navigate('collection')}
           />
         )}
-        {page === 'collection' && <JobCollection api={api} org="admin" />}
-        {page === 'planner' && <DemandMonitor api={api} state={summary} stale={Boolean(error)} onChanged={() => setRevision((n) => n + 1)} onViewJobs={() => navigate('collection')} />}
-        {page === 'users' && <AdminTable resource="users" api={api} />}
+        {page === 'settings' && <AccountSettings api={api} />}
+        {page === 'users' && <AccountDirectory api={api} />}
         {page === 'activity' && <AdminTable resource="activity" api={api} />}
         {page === 'contacts' && <EmployerContacts api={api} />}
         <AdminCopilot
