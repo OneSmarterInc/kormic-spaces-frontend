@@ -118,8 +118,8 @@ const columns: Record<Resource, string[]> = {
   runs: ['Search', 'Status', 'Results', 'Added', 'Queued', ''],
   sources: ['Search', 'Type', 'Status', 'Frequency', 'Next run', 'Latest run', ''],
   plans: ['Search', 'Status', 'Demand', 'Frequency', 'Next run', 'Latest run', ''],
-  users: ['User', 'Selected role', 'Location', 'Joined'],
-  companies: ['Company', 'Owner email', 'Status', 'Members', 'Last activity', 'Created'],
+  users: ['User', 'Selected role', 'Location', 'Status', 'Joined', ''],
+  companies: ['Company', 'Owner email', 'Status', 'Members', 'Last activity', 'Created', ''],
   admins: ['Name', 'Email', 'Company', 'Account type', 'Status', 'Last sign-in', 'Joined', ''],
   admin_invites: ['Name', 'Email', 'Status', 'Invited', 'Expires', ''],
   activity: ['Action', 'Actor', 'Company', 'Account type', 'Date'],
@@ -129,16 +129,16 @@ const columnSorts: Record<Resource, string[]> = {
   runs: ['name', 'status', 'results', 'added', 'recent', ''],
   sources: ['name', 'type', 'status', 'frequency', 'next', 'outcome', ''],
   plans: ['name', 'status', 'priority', 'frequency', 'next', 'outcome', ''],
-  users: ['name', 'role', 'location', 'recent'],
-  companies: ['name', 'email', 'status', 'members', 'activity', 'recent'],
+  users: ['name', 'role', 'location', 'status', 'recent', ''],
+  companies: ['name', 'email', 'status', 'members', 'activity', 'recent', ''],
   admins: ['name', 'email', 'company', 'account', 'status', 'activity', 'recent', ''],
   admin_invites: ['name', 'email', 'status', 'recent', 'expires', ''],
   activity: ['action', 'actor', 'company', 'account', 'recent'],
 };
 const tableWidths: Partial<Record<Resource, number[]>> = {
   activity: [35, 21, 20, 10, 14],
-  users: [40, 22, 18, 20],
-  companies: [23, 23, 12, 8, 17, 17],
+  users: [30, 18, 14, 10, 18, 10],
+  companies: [20, 21, 10, 7, 16, 16, 10],
   admins: [16, 22, 14, 9, 8, 11, 11, 9],
   admin_invites: [20, 25, 12, 16, 17, 10],
 };
@@ -451,6 +451,13 @@ export function AdminTable({
           <td>{row.member_count}</td>
           <td>{displayDate(row.last_activity)}</td>
           <td>{displayDate(row.created_at)}</td>
+          <td>
+            {onManage && (
+              <button className="table-link" onClick={() => onManage(row)}>
+                Manage
+              </button>
+            )}
+          </td>
         </>
       );
     if (resource === 'admins' || resource === 'admin_invites')
@@ -492,7 +499,15 @@ export function AdminTable({
           </td>
           <td>{row.career_path__role__name ?? 'Not selected'}</td>
           <td>{row.city || '—'}</td>
+          <td>{badge(row.status_label || '')}</td>
           <td className="nowrap">{displayDate(row.created_at)}</td>
+          <td>
+            {onManage && (
+              <button className="table-link" onClick={() => onManage(row)}>
+                Manage
+              </button>
+            )}
+          </td>
         </>
       );
     return (

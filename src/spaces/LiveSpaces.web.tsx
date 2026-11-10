@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from 'react';
 import { portalUrl, spacesPagePath, spacesPageSegment } from './deployment';
+import { workspaceUrl } from './workspaceNavigation';
 import { appConfig } from '../services/config';
 import {
   SpacesClient,
@@ -221,7 +222,83 @@ function Search({
   );
 }
 
+type JobPage = {
+  results: LiveJob[];
+  count: number;
+  offset: number;
+  limit: number;
+  nextOffset: number | null;
+};
+function useJobPage(
+  api: SpacesClient,
+  org: string | undefined,
+  query: string,
+  status: string,
+  enabled: boolean,
+  refresh?: unknown,
+) {
+  const [offset, setOffset] = useState(0);
+  const [result, setResult] = useState<{ key: string; page: JobPage }>();
+  const [error, setError] = useState('');
+  const key = JSON.stringify([org, query, status]);
+  const [previousKey, setPreviousKey] = useState(key);
+  if (previousKey !== key) {
+    setPreviousKey(key);
+    setOffset(0);
+  }
+  useEffect(() => {
+    if (!enabled || !org) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ q: query, status, limit: '25', offset: String(offset) });
+      void api
+        .request<JobPage>(`${org}/jobs/?${params}`, 'GET', undefined, controller.signal)
+        .then((page) => {
+          if (!controller.signal.aborted) {
+            setResult({ key: `${key}:${offset}`, page });
+            setError('');
+          }
+        })
+        .catch((cause: unknown) => {
+          if (!controller.signal.aborted) setError(errorText(cause));
+        });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [api, org, query, status, enabled, offset, key, refresh]);
+  const page = result?.key === `${key}:${offset}` ? result.page : undefined;
+  return { page, offset, setOffset, error };
+}
+function JobPageControls({ paging }: { paging: ReturnType<typeof useJobPage> }) {
+  return (
+    <div className="live-toolbar">
+      {paging.error && <p role="alert">{paging.error}</p>}
+      <Button
+        disabled={paging.offset === 0}
+        onClick={() => paging.setOffset(Math.max(0, paging.offset - 25))}
+      >
+        Previous jobs
+      </Button>
+      <span role="status">
+        {paging.page
+          ? `${paging.offset + (paging.page.count ? 1 : 0)}–${paging.offset + paging.page.results.length} of ${paging.page.count} jobs`
+          : 'Loading jobs…'}
+      </span>
+      <Button
+        disabled={!paging.page || paging.page.nextOffset === null}
+        onClick={() => paging.setOffset(paging.page!.nextOffset!)}
+      >
+        Next jobs
+      </Button>
+    </div>
+  );
+}
+
 function JobSelector({
+  api,
+  org,
   jobs,
   selected,
   allowAll = false,
@@ -229,6 +306,8 @@ function JobSelector({
   disabled,
   onSelect,
 }: {
+  api: SpacesClient;
+  org?: string;
   jobs: LiveJob[];
   selected?: LiveJob;
   allowAll?: boolean;
@@ -242,9 +321,10 @@ function JobSelector({
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const listId = useId();
+  const paging = useJobPage(api, org, query, '', open);
   const options = [
     ...(allowAll ? [{ id: 'all', title: 'All jobs', status: 'All workspace candidates' }] : []),
-    ...jobs,
+    ...(paging.page?.results ?? (query ? [] : jobs)),
   ].filter((job) =>
     `${job.title} ${job.status}`.toLowerCase().includes(query.trim().toLowerCase()),
   );
@@ -355,7 +435,8 @@ function JobSelector({
               </li>
             ))}
           </ul>
-          {!options.length && <p role="status">No jobs match your search.</p>}
+          <JobPageControls paging={paging} />
+          {!options.length && paging.page && <p role="status">No jobs match your search.</p>}
         </div>
       )}
     </div>
@@ -378,7 +459,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     if (access.token)
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }, [access.token]);
-  const [data, setData] = useState<WorkspaceData>();
+  const [workspaceData, setData] = useState<WorkspaceData>();
+  const [requestedWorkspace, setRequestedWorkspace] = useState(() =>
+    new URLSearchParams(location.search).get('workspace'),
+  );
+  const [navigationRevision, setNavigationRevision] = useState(0);
   const [page, setPage] = useState(pageFromUrl);
   const [jobId, setJobId] = useState(new URLSearchParams(location.search).get('job') ?? '');
   const [query, setQuery] = useState('');
@@ -404,7 +489,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [editing, setEditing] = useState<LiveJob>();
+  const [editing, setEditing] = useState<{
+    workspaceId: string;
+    job: LiveJob;
+    requestId: string;
+  }>();
   const [profileId, setProfileId] = useState('');
   const [reviewConflict, setReviewConflict] = useState<{
     path: string;
@@ -430,15 +519,26 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       return 'portal';
     }
   });
-  const requestedWorkspace =
-    typeof window === 'undefined'
-      ? ''
-      : new URLSearchParams(window.location.search).get('workspace');
   const membership =
-    session?.organizations.find((item) => item.id === requestedWorkspace) ??
-    session?.organizations[0];
+    requestedWorkspace !== null
+      ? session?.organizations.find((item) => item.id === requestedWorkspace)
+      : session?.organizations[0];
   const canAccess = canAccessWorkspace(session, membership?.id);
   const org = canAccess ? membership?.id : undefined;
+  const activeOrg = useRef(org);
+  activeOrg.current = org;
+  const data = workspaceData?.organization.id === org ? workspaceData : undefined;
+  useEffect(() => {
+    if (!membership || requestedWorkspace !== null) return;
+    const params = new URLSearchParams(location.search);
+    params.set('workspace', membership.id);
+    history.replaceState(null, '', `${location.pathname}?${params}`);
+    setRequestedWorkspace(membership.id);
+  }, [membership, requestedWorkspace]);
+  const openJobEditor = (draft: LiveJob) => {
+    if (org && data?.organization.id === org)
+      setEditing({ workspaceId: org, job: draft, requestId: crypto.randomUUID() });
+  };
   const inboxTransport = useMemo(
     () =>
       org && page === 'Messages'
@@ -455,6 +555,17 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const threads = inbox.threads;
   const threadId = inbox.selected ?? '';
   const { setSelected, clear: clearInbox, markRead } = inbox;
+  useEffect(() => {
+    setEditing(undefined);
+    setProfileId('');
+    setContactId('');
+    setReviewConflict(undefined);
+    setShareOpen(false);
+    setError('');
+    setNotice('');
+    setAnswers([]);
+    clearInbox();
+  }, [org, clearInbox]);
   const setThreadId = useCallback((id: string) => setSelected(id || undefined), [setSelected]);
   const sendAttempt = useRef<
     { personId: string; jobId: string; text: string; requestId: string } | undefined
@@ -502,7 +613,11 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     };
   }, [api, org, threadId, threads, markRead]);
   const job =
-    jobId === 'all' ? undefined : (data?.jobs.find((j) => j.id === jobId) ?? data?.jobs[0]);
+    jobId === 'all'
+      ? undefined
+      : (data?.jobs.find((j) => j.id === jobId) ?? data?.selectedJobData ?? data?.jobs[0]);
+  const jobsPaging = useJobPage(api, org, query, stageFilter, page === 'Jobs', data?.jobs);
+  const [pipelineOffset, setPipelineOffset] = useState(0);
   const copilotReady = !!data?.copilotConfigured && !loading;
   const candidateScope = JSON.stringify([org, jobId, candidateQuery, stageFilter]);
   const candidateKey = JSON.stringify([candidateScope, sort, pageSize]);
@@ -518,19 +633,26 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   const profile = (page === 'Candidates' ? displayedCandidates?.results : data?.candidates)?.find(
     (c) => c.id === profileId,
   );
+  const pipelineQuery = page === 'Pipeline' ? candidateQuery : '';
   const requestVersion = useRef(0);
   const reload = useCallback(
     async (selected?: string) => {
-      if (!org) return;
+      if (!org || activeOrg.current !== org) return;
       const version = ++requestVersion.current;
       setLoading(true);
       try {
         const params = new URLSearchParams();
+        if (page === 'Pipeline') {
+          params.set('candidates_offset', String(pipelineOffset));
+          params.set('candidates_q', pipelineQuery);
+        }
         if (selected && selected !== 'all') params.set('job', selected);
         if (['Candidates', 'Activity log'].includes(page))
           params.set('include_candidates', 'false');
         const next = await api.request<WorkspaceData>(`${org}/workspace/?${params}`);
-        if (version !== requestVersion.current) return;
+        if (version !== requestVersion.current || activeOrg.current !== org) return;
+        if (next.organization.id !== org)
+          throw new Error('Workspace response does not match the selected company.');
         setData(next);
         setJobId(selected === 'all' && page === 'Candidates' ? 'all' : (next.selectedJob ?? ''));
         setWorkspaceError('');
@@ -540,7 +662,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
         if (version === requestVersion.current) setLoading(false);
       }
     },
-    [api, org, page],
+    [api, org, page, pipelineOffset, pipelineQuery],
   );
   useEffect(() => {
     if (page !== 'Candidates' || !org || !data) return;
@@ -675,7 +797,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     return () => {
       versionRef.current++;
     };
-  }, [org, reload, session?.userId, sessionRevision]);
+  }, [org, reload, session?.userId, sessionRevision, navigationRevision]);
   useEffect(() => {
     const palette = themes.find((t) => t.id === theme)!;
     host.dataset.theme = theme;
@@ -691,13 +813,15 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   }, [host, theme]);
   useEffect(() => {
     const back = () => {
+      const params = new URLSearchParams(location.search);
+      setRequestedWorkspace(params.get('workspace'));
       setPage(pageFromUrl());
-      const id = new URLSearchParams(location.search).get('job') ?? '';
-      if (org) void reload(id);
+      setJobId(params.get('job') ?? '');
+      setNavigationRevision((value) => value + 1);
     };
     window.addEventListener('popstate', back);
     return () => window.removeEventListener('popstate', back);
-  }, [org, reload, session?.userId, sessionRevision]);
+  }, []);
   const navigate = (next: string) => {
     setPage(next);
     setQuery('');
@@ -707,7 +831,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     history.pushState(
       null,
       '',
-      `${spacesPagePath(paths[pages.indexOf(next)] ?? '')}${jobId ? `?job=${jobId}` : ''}`,
+      workspaceUrl(spacesPagePath(paths[pages.indexOf(next)] ?? ''), org, { job: jobId }),
     );
     window.scrollTo(0, 0);
   };
@@ -728,6 +852,14 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   };
   const mutate = async (path: string, method: string, body: unknown, success: string) => {
     try {
+      if (
+        !org ||
+        activeOrg.current !== org ||
+        data?.organization.id !== org ||
+        new URLSearchParams(location.search).get('workspace') !== org
+      ) {
+        throw new Error('Workspace changed. Reopen this action in the intended company.');
+      }
       await api.request(`${org}/${path}`, method, body);
     } catch (failure) {
       if (
@@ -748,6 +880,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
       }
       throw failure;
     }
+    if (activeOrg.current !== org) return;
     await reload(jobId);
     setNotice(success);
   };
@@ -784,7 +917,12 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     setAnswers([]);
     setProfileId('');
     setLimits({});
-    history.replaceState(null, '', `${spacesPagePath(paths[pages.indexOf(page)] ?? '')}?job=${id}`);
+    setPipelineOffset(0);
+    history.replaceState(
+      null,
+      '',
+      workspaceUrl(spacesPagePath(paths[pages.indexOf(page)] ?? ''), org, { job: id }),
+    );
     void reload(id);
   };
   const rows = useMemo(() => {
@@ -841,7 +979,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
     history.replaceState(
       null,
       '',
-      `${spacesPagePath('candidates')}?job=${view.filters.job ?? jobId}&view=${view.id}`,
+      workspaceUrl(spacesPagePath('candidates'), org, {
+        job: view.filters.job ?? jobId,
+        view: view.id,
+      }),
     );
   };
   useEffect(() => {
@@ -855,6 +996,9 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
   }, [data?.sharedViews]);
   const selector = (
     <JobSelector
+      key={org}
+      api={api}
+      org={org}
       jobs={data?.jobs ?? []}
       selected={job}
       allowAll={page === 'Candidates'}
@@ -983,7 +1127,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           >
             Matches
           </Button>
-          {canManage('jobs_edit') && <Button onClick={() => setEditing(j)}>Edit</Button>}
+          {canManage('jobs_edit') && <Button onClick={() => openJobEditor(j)}>Edit</Button>}
           {page === 'Jobs' && canManage('jobs_delete') && (
             <Button
               disabled={busy}
@@ -1137,9 +1281,17 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           <div className="login-form">
             <h1>Workspace access unavailable</h1>
             <p>
-              Your account has no workspace membership. Contact a workspace owner if you need
-              access.
+              The requested workspace is unavailable to this account. Open a valid company link or
+              contact its owner.
             </p>
+            {session.organizations.map((item) => (
+              <Button
+                key={item.id}
+                onClick={() => window.location.assign(workspaceUrl(spacesPagePath(''), item.id))}
+              >
+                Open {item.name}
+              </Button>
+            ))}
             {error && <p role="alert">{error}</p>}
             <Button
               disabled={busy}
@@ -1338,7 +1490,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   </Button>
                 )}
                 {['Overview', 'Jobs'].includes(page) && canManage('jobs_create') && (
-                  <Button primary onClick={() => setEditing({ ...emptyJob })}>
+                  <Button primary onClick={() => openJobEditor({ ...emptyJob })}>
                     + Create a job
                   </Button>
                 )}
@@ -1389,7 +1541,9 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   </div>
                   <Button
                     primary
-                    onClick={() => (job ? navigate('Hiring copilot') : setEditing({ ...emptyJob }))}
+                    onClick={() =>
+                      job ? navigate('Hiring copilot') : openJobEditor({ ...emptyJob })
+                    }
                   >
                     {job ? 'Explore with Sage' : 'Create your first job'}
                   </Button>
@@ -1438,15 +1592,10 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                   </select>
                 </div>
                 <section className="opportunity-grid">
-                  {data.jobs
-                    .filter(
-                      (j) =>
-                        `${j.title} ${j.department}`.toLowerCase().includes(query.toLowerCase()) &&
-                        (!stageFilter || j.status === stageFilter),
-                    )
-                    .map(jobCard)}
+                  {(jobsPaging.page?.results ?? []).map(jobCard)}
                 </section>
-                {!data.jobs.length && (
+                <JobPageControls paging={jobsPaging} />
+                {jobsPaging.page?.count === 0 && (
                   <Empty>
                     Create a job. Drafts remain private; live jobs appear in the candidate portal.
                   </Empty>
@@ -1556,6 +1705,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                     value={query}
                     onChange={(v) => {
                       setQuery(v);
+                      setPipelineOffset(0);
                       setLimits({});
                     }}
                   />
@@ -1601,6 +1751,29 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                         </section>
                       );
                     })}
+                </div>
+                <div className="live-toolbar">
+                  <Button
+                    disabled={loading || pipelineOffset === 0}
+                    onClick={() => setPipelineOffset(Math.max(0, pipelineOffset - 50))}
+                  >
+                    Previous candidates
+                  </Button>
+                  <span>
+                    {data.candidatesPage
+                      ? `${pipelineOffset + (data.candidatesPage.count ? 1 : 0)}–${pipelineOffset + data.candidates.length} of ${data.candidatesPage.count} candidates`
+                      : ''}
+                  </span>
+                  <Button
+                    disabled={
+                      loading ||
+                      !data.candidatesPage ||
+                      pipelineOffset + 50 >= data.candidatesPage.count
+                    }
+                    onClick={() => setPipelineOffset(pipelineOffset + 50)}
+                  >
+                    Next candidates
+                  </Button>
                 </div>
               </>
             )}
@@ -1744,7 +1917,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                           Sage needs a role and its requirements before it can help you assess
                           candidates.
                         </p>
-                        <Button primary onClick={() => setEditing({ ...emptyJob })}>
+                        <Button primary onClick={() => openJobEditor({ ...emptyJob })}>
                           Create your first job
                         </Button>
                       </div>
@@ -2038,8 +2211,8 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                     )}
                     <h3>Evidence and privacy</h3>
                     <p>
-                      Sage uses up to 25 shared profiles that allow AI assistance. Private chats and
-                      screening details are excluded.
+                      Sage uses up to 25 currently eligible profiles for this job that allow AI
+                      assistance. Private chats and screening details are excluded.
                     </p>
                     <p>
                       Answers and drafts support your review. You make hiring decisions and send
@@ -2099,18 +2272,24 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
           <Button onClick={() => setReviewConflict(undefined)}>Keep editing</Button>
         </Modal>
       )}
-      {editing && (
-        <Modal title={editing.id ? 'Edit job' : 'Create a job'} close={() => setEditing(undefined)}>
+      {editing && editing.workspaceId === org && (
+        <Modal
+          title={editing.job.id ? 'Edit job' : 'Create a job'}
+          close={() => setEditing(undefined)}
+        >
+          <p className="muted">Company: {data?.organization.name}</p>
           <JobForm
-            initial={editing}
+            initial={editing.job}
             busy={busy}
             error={error}
             save={(draft) =>
               run(async () => {
+                if (editing.workspaceId !== org || activeOrg.current !== editing.workspaceId)
+                  throw new Error('Workspace changed. Reopen the job form.');
                 await mutate(
                   `jobs/${draft.id ? `${draft.id}/` : ''}`,
                   draft.id ? 'PATCH' : 'POST',
-                  draft,
+                  draft.id ? draft : { ...draft, requestId: editing.requestId },
                   `Job saved as ${draft.status}.`,
                 );
                 setEditing(undefined);
@@ -2182,7 +2361,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                 history.replaceState(
                   null,
                   '',
-                  `${spacesPagePath('candidates')}?job=${jobId}&view=${v.id}`,
+                  workspaceUrl(spacesPagePath('candidates'), org, { job: jobId, view: v.id }),
                 );
                 setNotice(`Shared view saved. Copy this page’s URL to share with your team.`);
               });

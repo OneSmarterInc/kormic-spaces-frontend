@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { SpacesClient } from './liveApi';
 import { AdminTable, Dialog, type Row } from './AdminTable.web';
+import { ManageAccount } from './ManageAccount.web';
 
 export function AccountDirectory({ api }: { api: SpacesClient }) {
   const [tab, setTab] = useState<'users' | 'companies' | 'admins'>('users');
@@ -10,6 +11,7 @@ export function AccountDirectory({ api }: { api: SpacesClient }) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [revision, setRevision] = useState(0);
+  const [managed, setManaged] = useState<{ resource: string; identifier: string }>();
   function open(next: string, row?: Row) {
     setAction(next);
     setEditing(row);
@@ -72,8 +74,26 @@ export function AccountDirectory({ api }: { api: SpacesClient }) {
         api={api}
         resource={tab}
         revision={revision}
-        onManage={tab === 'admins' ? (row) => open('update', row) : undefined}
+        onManage={(row) =>
+          tab === 'admins'
+            ? open('update', row)
+            : setManaged({
+                resource: tab,
+                identifier: String(tab === 'users' ? row.person_id : row.id),
+              })
+        }
       />
+      {managed && (
+        <ManageAccount
+          api={api}
+          {...managed}
+          onClose={() => setManaged(undefined)}
+          onSaved={() => {
+            setRevision((value) => value + 1);
+            setNotice('Account action completed.');
+          }}
+        />
+      )}
       {tab === 'admins' && (
         <details style={{ marginTop: 16 }}>
           <summary>Pending administrator invitations</summary>

@@ -1,3 +1,4 @@
+import { AgentProposal } from './AgentProposal.web';
 import {
   ChatHistory,
   ChatHistoryStyles,
@@ -21,6 +22,7 @@ export function AdminCopilot({
   users?: number;
 }) {
   const [draft, setDraft] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const pending = useRef(false),
     controller = useRef<AbortController | null>(null);
@@ -49,6 +51,7 @@ export function AdminCopilot({
     if (
       !question ||
       pending.current ||
+      actionBusy ||
       history.loading ||
       messages.some((m) => m.status === 'pending')
     )
@@ -64,11 +67,17 @@ export function AdminCopilot({
       const result = await api.request<{
         answer: string;
         conversationId?: string;
+        action?: ChatMessage['action'];
         model?: { provider: string };
       }>(
         'admin/copilot/',
         'POST',
-        { prompt: question, requestId: id, conversationId: history.active?.id },
+        {
+          prompt: question,
+          requestId: id,
+          conversationId: history.active?.id,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        },
         controller.current.signal,
       );
       if (controller.current.signal.aborted) return;
@@ -79,6 +88,7 @@ export function AdminCopilot({
             ? {
                 ...m,
                 answer: result.answer,
+                action: result.action,
                 source: result.model?.provider,
                 status: 'completed',
               }
@@ -106,7 +116,7 @@ export function AdminCopilot({
       input.current?.focus();
     }
   }
-  const busy = history.loading || messages.some((m) => m.status === 'pending');
+  const busy = actionBusy || history.loading || messages.some((m) => m.status === 'pending');
   return (
     <div className="copilot-layout" hidden={!visible}>
       <ChatHistoryStyles />
@@ -114,7 +124,7 @@ export function AdminCopilot({
         <header className="copilot-thread-header">
           <div>
             <strong>Operations assistant</strong>
-            <span>Read-only access to portal metrics</span>
+            <span>Platform visibility · Changes require confirmation</span>
           </div>
           <div className="chat-header-actions">
             <button
@@ -207,6 +217,23 @@ export function AdminCopilot({
                   >
                     <AssistantText text={message.answer} />
                   </div>
+                )}
+                {message.action && (
+                  <AgentProposal
+                    api={api}
+                    action={message.action}
+                    disabled={busy}
+                    busyChanged={setActionBusy}
+                    changed={(status) =>
+                      setMessages((items) =>
+                        items.map((item) =>
+                          item.id === message.id && item.action
+                            ? { ...item, action: { ...item.action, status } }
+                            : item,
+                        ),
+                      )
+                    }
+                  />
                 )}
                 {message.status === 'failed' && (
                   <button

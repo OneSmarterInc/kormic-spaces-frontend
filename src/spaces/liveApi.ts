@@ -62,6 +62,9 @@ export interface WorkspaceData {
   organization: { id: string; name: string; role: string; permissions?: string[] };
   jobs: LiveJob[];
   selectedJob: string | null;
+  selectedJobData?: LiveJob | null;
+  jobsPage?: { count: number; offset: number; limit: number };
+  candidatesPage?: { count: number; offset: number; limit: number };
   candidates: LiveCandidate[];
   overview: {
     liveJobs: number;

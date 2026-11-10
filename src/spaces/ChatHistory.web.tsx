@@ -13,6 +13,7 @@ export type ChatMessage = {
     data: Record<string, unknown>;
     status: string;
     expiresAt: string;
+    requiresPassword?: boolean;
   };
 };
 export type ChatConversation = {
@@ -65,9 +66,10 @@ export function useChatHistory({
   }, []);
   useEffect(() => {
     reset();
+    const lifecycle = { generation, request };
     return () => {
-      generation.current++;
-      request.current?.abort();
+      lifecycle.generation.current++;
+      lifecycle.request.current?.abort();
     };
   }, [scope, reset]);
   const open = useCallback(
