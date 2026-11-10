@@ -2096,6 +2096,7 @@ export function LiveSpaces({ host }: { host: HTMLDivElement }) {
                             jobId: job?.id,
                             prompt,
                             requestId: id,
+                            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
                             conversationId: chatHistory.active?.id,
                           });
                           if (!chatHistory.isCurrent()) return;
