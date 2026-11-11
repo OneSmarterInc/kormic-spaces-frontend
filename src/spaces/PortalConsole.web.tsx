@@ -14,6 +14,7 @@ import { OperationsCharts, type TrendPoint } from './OperationsCharts.web';
 import { spacesPagePath, spacesPageSegment } from './deployment';
 import { portalStyles } from './portalStyles';
 import { EmployerContacts } from './EmployerContacts.web';
+import { ApplicantAgent } from './ApplicantAgent.web';
 
 type Summary = AgentState & {
   recent_runs: RunSummary[];
@@ -40,6 +41,7 @@ type Summary = AgentState & {
 const pages = {
   overview: 'Overview',
   collection: 'Job data',
+  applicants: 'Applicant Agent',
   contacts: 'Companies & contacts',
   planner: 'Search agents',
   users: 'Users',
@@ -233,11 +235,15 @@ export function PortalConsole() {
         </div>
         <nav aria-label="Administration">
           {Object.entries(pages)
-            .filter(([key]) => key !== 'settings')
+            .filter(([key]) => !['settings', 'contacts', 'planner'].includes(key))
             .map(([key, label]) => (
               <button
                 key={key}
-                aria-current={page === key ? 'page' : undefined}
+                aria-current={
+                  page === key || (key === 'collection' && ['contacts', 'planner'].includes(page))
+                    ? 'page'
+                    : undefined
+                }
                 onClick={() => navigate(key as Page)}
               >
                 <svg
@@ -256,6 +262,7 @@ export function PortalConsole() {
                       {
                         overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
                         collection: 'M4 7h16v14H4z M8 7V3h8v4 M4 12h16 M10 12v3h4v-3',
+                        applicants: 'M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
                         contacts: 'M4 21V3h12v18 M8 7h4 M8 11h4 M8 15h4 M16 9h4v12 M2 21h20',
                         planner: 'M8 3h8v4H8z M3 17h6v4H3z M15 17h6v4h-6z M12 7v5 M6 17v-5h12v5',
                         users: 'M16 7a4 4 0 1 1-8 0a4 4 0 0 1 8 0 M4 21v-2a8 8 0 0 1 16 0v2',
@@ -266,7 +273,7 @@ export function PortalConsole() {
                     }
                   />
                 </svg>
-                <span>{label}</span>
+                <span>{key === 'collection' ? 'Job Agent' : label}</span>
               </button>
             ))}
         </nav>
@@ -350,8 +357,10 @@ export function PortalConsole() {
         </header>
         <div className="portal-title">
           <div>
-            <h1>{pages[page]}</h1>
-            {!['collection', 'copilot'].includes(page) && (
+            <h1>
+              {['collection', 'contacts', 'planner'].includes(page) ? 'Job Agent' : pages[page]}
+            </h1>
+            {!['collection', 'contacts', 'planner', 'applicants', 'copilot'].includes(page) && (
               <p>
                 {page === 'overview'
                   ? 'Your portal, agents and data at a glance.'
@@ -441,6 +450,29 @@ export function PortalConsole() {
               </div>
             </>
           ))}
+        {['collection', 'contacts', 'planner'].includes(page) && (
+          <nav
+            className="admin-tabs"
+            aria-label="Job Agent views"
+            style={{
+              marginBottom: 16,
+              width: 'fit-content',
+              maxWidth: '100%',
+              overflowX: 'auto',
+            }}
+          >
+            {(['collection', 'contacts', 'planner'] as const).map((tab) => (
+              <button
+                key={tab}
+                aria-current={page === tab ? 'page' : undefined}
+                onClick={() => navigate(tab)}
+              >
+                {pages[tab]}
+              </button>
+            ))}
+          </nav>
+        )}
+        {page === 'applicants' && <ApplicantAgent api={api} key={session.userId} />}
         {page === 'collection' && <JobCollection api={api} org="admin" />}
         {page === 'planner' && (
           <DemandMonitor
